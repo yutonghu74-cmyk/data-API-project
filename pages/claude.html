@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Chat</title>
+  <link rel="stylesheet" href="../assets/css/base.css">
+  <style>
+    .page-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 20px 0 28px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+    }
+    .page-header a { color: var(--text-muted); text-decoration: none; font-size: .9rem; }
+    .page-header a:hover { color: var(--text); }
+    .page-header h1 { font-size: 1.1rem; font-weight: 600; }
+
+    .config-card { margin-bottom: 16px; display: grid; gap: 14px; }
+    .config-row { display: grid; grid-template-columns: 1fr 200px; gap: 14px; }
+
+    .messages {
+      height: 420px;
+      overflow-y: auto;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .bubble {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: .92rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .bubble-user {
+      background: var(--accent);
+      color: #fff;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+    .bubble-assistant {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+    }
+    .bubble-error {
+      background: rgba(248,113,113,.1);
+      border: 1px solid var(--error);
+      color: var(--error);
+      align-self: flex-start;
+      border-radius: var(--radius);
+      font-size: .85rem;
+    }
+    .cursor::after {
+      content: '▋';
+      animation: blink .7s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .input-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+    .input-row textarea {
+      flex: 1;
+      resize: none;
+      height: 44px;
+      line-height: 1.5;
+      padding: 10px 14px;
+    }
+    .btn-secondary {
+      background: var(--border);
+      color: var(--text);
+    }
+    .btn-secondary:hover { background: var(--surface); }
+
+    .empty-hint {
+      color: var(--text-muted);
+      font-size: .85rem;
+      text-align: center;
+      margin: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <a href="../index.html">← 返回</a>
+      <h1>Claude Chat</h1>
+    </div>
+
+    <div class="card config-card">
+      <div class="form-group" style="margin:0">
+        <label>System Prompt</label>
+        <textarea id="systemPrompt" rows="2" placeholder="可选：设置助手角色或背景…" style="resize:vertical"></textarea>
+      </div>
+      <div class="config-row">
+        <div class="form-group" style="margin:0">
+          <label>Model</label>
+          <select id="modelSelect"></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="messages" id="messages">
+      <p class="empty-hint">发送消息开始对话</p>
+    </div>
+
+    <div class="input-row">
+      <textarea id="userInput" placeholder="输入消息… (Enter 发送，Shift+Enter 换行)"></textarea>
+      <button class="btn-primary" id="sendBtn">发送</button>
+      <button class="btn-secondary" id="clearBtn">清空</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { streamChat, fetchModels } from '../assets/js/stream.js';
+
+    const messagesEl   = document.getElementById('messages');
+    const userInput    = document.getElementById('userInput');
+    const sendBtn      = document.getElementById('sendBtn');
+    const clearBtn     = document.getElementById('clearBtn');
+    const modelSelect  = document.getElementById('modelSelect');
+    const systemPrompt = document.getElementById('systemPrompt');
+
+    let history = [];
+
+    fetchModels()
+      .then(models => {
+        models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          opt.textContent = m;
+          modelSelect.appendChild(opt);
+        });
+        const sonnetOpt = [...modelSelect.options].find(o => o.value.includes('sonnet'));
+        if (sonnetOpt) sonnetOpt.selected = true;
+      })
+      .catch(() => {
+        ['claude-haiku-4-5-20251001','claude-sonnet-4-6','claude-opus-4-7'].forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m; opt.textContent = m;
+          modelSelect.appendChild(opt);
+        });
+      });
+
+    function addBubble(role, text = '') {
+      const empty = messagesEl.querySelector('.empty-hint');
+      if (empty) empty.remove();
+      const div = document.createElement('div');
+      div.className = `bubble bubble-${role}`;
+      div.textContent = text;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    function addError(msg) {
+      const div = document.createElement('div');
+      div.className = 'bubble bubble-error';
+      div.textContent = msg;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function setInputEnabled(enabled) {
+      userInput.disabled = !enabled;
+      sendBtn.disabled   = !enabled;
+    }
+
+    async function send() {
+      const text = userInput.value.trim();
+      if (!text) return;
+
+      userInput.value = '';
+      addBubble('user', text);
+      history.push({ role: 'user', content: text });
+
+      setInputEnabled(false);
+      const assistantBubble = addBubble('assistant');
+      assistantBubble.classList.add('cursor');
+      let accumulated = '';
+
+      await streamChat({
+        messages: history,
+        model:    modelSelect.value,
+        system:   systemPrompt.value.trim(),
+        onToken(chunk) {
+          accumulated += chunk;
+          assistantBubble.textContent = accumulated;
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        },
+        onDone() {
+          assistantBubble.classList.remove('cursor');
+          history.push({ role: 'assistant', content: accumulated });
+          setInputEnabled(true);
+          userInput.focus();
+        },
+        onError(err) {
+          assistantBubble.remove();
+          history.pop();
+          addError(err);
+          setInputEnabled(true);
+        },
+      });
+    }
+
+    sendBtn.addEventListener('click', send);
+
+    userInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      history = [];
+      messagesEl.innerHTML = '<p class="empty-hint">发送消息开始对话</p>';
+    });
+  </script>
+</body>
+</html>
