@@ -93,6 +93,37 @@
       text-align: center;
       margin: auto;
     }
+    .attachments-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .attachment-tag {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: .8rem;
+      color: var(--text);
+    }
+    .attachment-tag button {
+      background: none;
+      color: var(--text-muted);
+      padding: 0 2px;
+      font-size: .85rem;
+      line-height: 1;
+      border-radius: 3px;
+      min-width: unset;
+    }
+    .attachment-tag button:hover { color: var(--error); background: none; }
+    .drag-over {
+      border-color: var(--accent) !important;
+      background: rgba(108,124,255,.06) !important;
+    }
   </style>
 </head>
 <body>
@@ -119,8 +150,13 @@
       <p class="empty-hint">发送消息开始对话</p>
     </div>
 
+    <div class="attachments-row" id="attachmentsRow"></div>
     <div class="input-row">
       <textarea id="userInput" placeholder="输入消息… (Enter 发送，Shift+Enter 换行)"></textarea>
+      <input type="file" id="fileInput" multiple
+             accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/csv,text/markdown,.md"
+             style="display:none">
+      <button class="btn-secondary" id="attachBtn" title="附加文件">📎</button>
       <button class="btn-primary" id="sendBtn">发送</button>
       <button class="btn-secondary" id="clearBtn">清空</button>
     </div>
@@ -129,14 +165,26 @@
   <script type="module">
     import { streamChat, fetchModels } from '../assets/js/stream.js';
 
-    const messagesEl   = document.getElementById('messages');
-    const userInput    = document.getElementById('userInput');
-    const sendBtn      = document.getElementById('sendBtn');
-    const clearBtn     = document.getElementById('clearBtn');
-    const modelSelect  = document.getElementById('modelSelect');
-    const systemPrompt = document.getElementById('systemPrompt');
+    const messagesEl     = document.getElementById('messages');
+    const userInput      = document.getElementById('userInput');
+    const sendBtn        = document.getElementById('sendBtn');
+    const clearBtn       = document.getElementById('clearBtn');
+    const modelSelect    = document.getElementById('modelSelect');
+    const systemPrompt   = document.getElementById('systemPrompt');
+    const attachmentsRow = document.getElementById('attachmentsRow');
+    const fileInput      = document.getElementById('fileInput');
+    const attachBtn      = document.getElementById('attachBtn');
+
+    const ACCEPTED_TYPES = {
+      'image/jpeg': 'image', 'image/png': 'image',
+      'image/gif': 'image',  'image/webp': 'image',
+      'application/pdf': 'document',
+      'text/plain': 'document', 'text/csv': 'document', 'text/markdown': 'document',
+    };
+    const MAX_SIZE = 20 * 1024 * 1024;
 
     let history = [];
+    let attachments = [];
 
     fetchModels()
       .then(models => {
@@ -178,18 +226,83 @@
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
+    function readFileAsBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload  = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = () => reject(new Error(`文件读取失败：${file.name}`));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function processFiles(files) {
+      for (const file of files) {
+        if (file.type.startsWith('video/')) {
+          addError('不支持视频文件，请上传图片或文档'); continue;
+        }
+        if (!ACCEPTED_TYPES[file.type]) {
+          addError(`不支持的文件类型：${file.name}`); continue;
+        }
+        if (file.size > MAX_SIZE) {
+          addError(`文件超过 20MB 限制：${file.name}`); continue;
+        }
+        try {
+          const base64 = await readFileAsBase64(file);
+          attachments.push({ name: file.name, mimeType: file.type, base64 });
+          renderAttachments();
+        } catch (err) { addError(err.message); }
+      }
+    }
+
+    function renderAttachments() {
+      attachmentsRow.innerHTML = '';
+      attachments.forEach((att, i) => {
+        const icon = att.mimeType.startsWith('image/') ? '🖼️' : '📄';
+        const tag  = document.createElement('div');
+        tag.className = 'attachment-tag';
+        tag.innerHTML = `<span>${icon} ${att.name}</span><button data-i="${i}">✕</button>`;
+        tag.querySelector('button').addEventListener('click', () => {
+          attachments.splice(i, 1);
+          renderAttachments();
+        });
+        attachmentsRow.appendChild(tag);
+      });
+    }
+
     function setInputEnabled(enabled) {
-      userInput.disabled = !enabled;
-      sendBtn.disabled   = !enabled;
+      userInput.disabled  = !enabled;
+      sendBtn.disabled    = !enabled;
+      attachBtn.disabled  = !enabled;
+      fileInput.disabled  = !enabled;
     }
 
     async function send() {
       const text = userInput.value.trim();
-      if (!text) return;
+      if (!text && attachments.length === 0) return;
 
       userInput.value = '';
-      addBubble('user', text);
-      history.push({ role: 'user', content: text });
+
+      let content;
+      if (attachments.length === 0) {
+        content = text;
+      } else {
+        content = [];
+        if (text) content.push({ type: 'text', text });
+        for (const att of attachments) {
+          if (att.mimeType.startsWith('image/')) {
+            content.push({ type: 'image', source: { type: 'base64', media_type: att.mimeType, data: att.base64 } });
+          } else {
+            content.push({ type: 'document', source: { type: 'base64', media_type: att.mimeType, data: att.base64 } });
+          }
+        }
+      }
+
+      const displayText = text + (attachments.length > 0 ? `\n[📎 ${attachments.length} 个附件]` : '');
+      addBubble('user', displayText);
+      history.push({ role: 'user', content });
+
+      attachments = [];
+      renderAttachments();
 
       setInputEnabled(false);
       const assistantBubble = addBubble('assistant');
@@ -229,6 +342,24 @@
     clearBtn.addEventListener('click', () => {
       history = [];
       messagesEl.innerHTML = '<p class="empty-hint">发送消息开始对话</p>';
+    });
+
+    attachBtn.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', () => {
+      processFiles([...fileInput.files]);
+      fileInput.value = '';
+    });
+
+    messagesEl.addEventListener('dragover', e => {
+      e.preventDefault();
+      messagesEl.classList.add('drag-over');
+    });
+    messagesEl.addEventListener('dragleave', () => messagesEl.classList.remove('drag-over'));
+    messagesEl.addEventListener('drop', e => {
+      e.preventDefault();
+      messagesEl.classList.remove('drag-over');
+      processFiles([...e.dataTransfer.files]);
     });
   </script>
 </body>
