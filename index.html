@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API 调用平台</title>
+  <link rel="stylesheet" href="assets/css/base.css">
+  <style>
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 1.2rem; font-weight: 600; }
+    header span { font-size: 0.8rem; color: var(--text-muted); }
+
+    .nav-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 16px;
+      margin-top: 32px;
+    }
+
+    .nav-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px 20px;
+      text-decoration: none;
+      color: var(--text);
+      transition: border-color 0.2s, transform 0.15s;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .nav-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+
+    .nav-card .icon { font-size: 1.8rem; }
+    .nav-card .title { font-weight: 600; font-size: 1rem; }
+    .nav-card .desc  { font-size: 0.82rem; color: var(--text-muted); }
+
+    .section-title {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      margin-top: 40px;
+      margin-bottom: 4px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>API 调用平台</h1>
+      <span>第三方接口集成 · 快速测试 · 可视化响应</span>
+    </div>
+  </header>
+
+  <div class="container">
+    <p class="section-title">已集成接口</p>
+    <div class="nav-grid" id="nav">
+      <!-- 页面卡片动态渲染 -->
+    </div>
+  </div>
+
+  <script type="module">
+    const pages = [
+      // 在此添加已创建的 API 页面，例如：
+      // { icon: '🤖', title: 'OpenAI Chat', desc: 'GPT 对话接口', href: 'pages/openai.html' },
+      // { icon: '☁️', title: '天气查询',    desc: 'OpenWeatherMap', href: 'pages/weather.html' },
+    ];
+
+    const grid = document.getElementById('nav');
+
+    if (pages.length === 0) {
+      grid.innerHTML = `<p style="color:var(--text-muted);font-size:.9rem;grid-column:1/-1">暂无页面，请在 pages/ 目录下新建 API 调用页面。</p>`;
+    } else {
+      pages.forEach(p => {
+        grid.insertAdjacentHTML('beforeend', `
+          <a class="nav-card" href="${p.href}">
+            <span class="icon">${p.icon}</span>
+            <span class="title">${p.title}</span>
+            <span class="desc">${p.desc}</span>
+          </a>`);
+      });
+    }
+  </script>
+</body>
+</html>

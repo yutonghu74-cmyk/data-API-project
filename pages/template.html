@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API 名称</title>
+  <link rel="stylesheet" href="../assets/css/base.css">
+  <style>
+    h2 { font-size: 1.1rem; margin-bottom: 20px; }
+    .form-group { margin-bottom: 16px; }
+    .actions { display: flex; gap: 10px; margin-top: 8px; }
+    .resp-header { display: flex; justify-content: space-between; align-items: center; margin: 24px 0 8px; font-size:.85rem; color:var(--text-muted); }
+    a.back { font-size:.85rem; color:var(--text-muted); text-decoration:none; display:inline-block; margin-bottom:24px; }
+    a.back:hover { color:var(--text); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a class="back" href="../index.html">← 返回首页</a>
+
+    <div class="card">
+      <h2>API 名称</h2>
+
+      <div class="form-group">
+        <label>参数 1</label>
+        <input type="text" id="param1" placeholder="输入内容…">
+      </div>
+
+      <div class="actions">
+        <button class="btn-primary" id="sendBtn">发送请求</button>
+        <button id="clearBtn" style="background:var(--border);color:var(--text)">清空</button>
+      </div>
+    </div>
+
+    <div class="resp-header">
+      <span>响应结果</span>
+      <span id="statusLabel"></span>
+    </div>
+    <div class="response-box" id="output">结果将显示在这里…</div>
+  </div>
+
+  <script type="module">
+    import { request } from '../assets/js/request.js';
+
+    document.getElementById('sendBtn').addEventListener('click', async () => {
+      const param1 = document.getElementById('param1').value.trim();
+      const output = document.getElementById('output');
+      const statusLabel = document.getElementById('statusLabel');
+
+      if (!param1) { output.textContent = '请填写参数'; return; }
+
+      output.textContent = '请求中…';
+      statusLabel.textContent = '';
+
+      try {
+        // TODO: 替换为实际 API 地址和参数
+        const data = await request('https://api.example.com/endpoint', {
+          method: 'POST',
+          body: { param1 },
+        });
+
+        output.textContent = JSON.stringify(data, null, 2);
+        statusLabel.textContent = '200 OK';
+        statusLabel.className = 'status-ok';
+      } catch (err) {
+        output.textContent = JSON.stringify(err, null, 2);
+        statusLabel.textContent = `错误 ${err.status ?? ''}`;
+        statusLabel.className = 'status-err';
+      }
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', () => {
+      document.getElementById('param1').value = '';
+      document.getElementById('output').textContent = '结果将显示在这里…';
+      document.getElementById('statusLabel').textContent = '';
+    });
+  </script>
+</body>
+</html>
