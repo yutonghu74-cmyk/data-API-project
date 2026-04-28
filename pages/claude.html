@@ -155,6 +155,8 @@
           opt.value = m; opt.textContent = m;
           modelSelect.appendChild(opt);
         });
+        const sonnetOpt = [...modelSelect.options].find(o => o.value.includes('sonnet'));
+        if (sonnetOpt) sonnetOpt.selected = true;
       });
 
     function addBubble(role, text = '') {
