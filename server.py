@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from typing import Literal
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
@@ -18,15 +19,20 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost", "http://127.0.0.1", "null"],
+    allow_origin_regex=r"http://localhost:\d+",
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 MODELS = ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7"]
 
+class Message(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
 class ChatRequest(BaseModel):
-    messages: list[dict]
+    messages: list[Message]
     model: str = "claude-sonnet-4-6"
     system: str = ""
 
@@ -39,7 +45,7 @@ def models():
     return {"models": MODELS}
 
 @app.post("/chat")
-def chat(req: ChatRequest):
+async def chat(req: ChatRequest):
     if req.model not in MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model: {req.model}")
 
@@ -48,7 +54,7 @@ def chat(req: ChatRequest):
             kwargs = dict(
                 model=req.model,
                 max_tokens=4096,
-                messages=req.messages,
+                messages=[m.model_dump() for m in req.messages],
             )
             if req.system:
                 kwargs["system"] = req.system
@@ -57,7 +63,7 @@ def chat(req: ChatRequest):
                 for text in stream.text_stream:
                     yield f"data: {json.dumps({'text': text})}\n\n"
             yield "data: [DONE]\n\n"
-        except anthropic.APIError as e:
+        except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
