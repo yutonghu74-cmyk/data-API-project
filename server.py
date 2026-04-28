@@ -30,9 +30,21 @@ app.add_middleware(
 
 MODELS = ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7"]
 
+class TextBlock(BaseModel):
+    type: Literal["text"]
+    text: str
+
+class ImageBlock(BaseModel):
+    type: Literal["image"]
+    source: dict
+
+class DocumentBlock(BaseModel):
+    type: Literal["document"]
+    source: dict
+
 class Message(BaseModel):
     role: Literal["user", "assistant"]
-    content: str
+    content: str | list[TextBlock | ImageBlock | DocumentBlock]
 
 class ChatRequest(BaseModel):
     messages: list[Message]
