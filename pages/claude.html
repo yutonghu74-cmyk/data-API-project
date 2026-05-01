@@ -260,11 +260,16 @@
         const icon = att.mimeType.startsWith('image/') ? '🖼️' : '📄';
         const tag  = document.createElement('div');
         tag.className = 'attachment-tag';
-        tag.innerHTML = `<span>${icon} ${att.name}</span><button data-i="${i}">✕</button>`;
-        tag.querySelector('button').addEventListener('click', () => {
+        const span = document.createElement('span');
+        span.textContent = `${icon} ${att.name}`;
+        const btn = document.createElement('button');
+        btn.textContent = '✕';
+        btn.addEventListener('click', () => {
           attachments.splice(i, 1);
           renderAttachments();
         });
+        tag.appendChild(span);
+        tag.appendChild(btn);
         attachmentsRow.appendChild(tag);
       });
     }
@@ -291,8 +296,11 @@
         for (const att of attachments) {
           if (att.mimeType.startsWith('image/')) {
             content.push({ type: 'image', source: { type: 'base64', media_type: att.mimeType, data: att.base64 } });
+          } else if (att.mimeType === 'application/pdf') {
+            content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: att.base64 } });
           } else {
-            content.push({ type: 'document', source: { type: 'base64', media_type: att.mimeType, data: att.base64 } });
+            const rawText = atob(att.base64);
+            content.push({ type: 'document', source: { type: 'text', media_type: 'text/plain', data: rawText } });
           }
         }
       }
@@ -341,6 +349,8 @@
 
     clearBtn.addEventListener('click', () => {
       history = [];
+      attachments = [];
+      renderAttachments();
       messagesEl.innerHTML = '<p class="empty-hint">发送消息开始对话</p>';
     });
 
