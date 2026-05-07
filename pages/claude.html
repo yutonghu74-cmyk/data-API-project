@@ -84,6 +84,7 @@
         <a href="apply.html"   class="sidebar-item">API申请&审核</a>
         <a href="keys.html"    class="sidebar-item">密钥管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
+        <a href="history.html" class="sidebar-item">历史记录</a>
         <a href="users.html"   class="sidebar-item" id="usersLink" style="display:none">用户管理</a>
       </div>
     </div>
@@ -168,6 +169,34 @@ const ACCEPTED_TYPES = {
 const MAX_SIZE = 20 * 1024 * 1024;
 let history = [];
 let attachments = [];
+let currentSessionId = null;
+
+async function ensureSession(firstMessageText) {
+  if (currentSessionId) return;
+  try {
+    const res = await fetch('http://localhost:8000/sessions', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        config_id: configSelect.value ? parseInt(configSelect.value) : null,
+        model: modelSelect.value,
+        title: firstMessageText.slice(0, 50),
+      }),
+    });
+    const data = await res.json();
+    currentSessionId = data.session_id;
+  } catch(e) { console.error('创建会话失败', e); }
+}
+
+async function saveMessage(role, content) {
+  if (!currentSessionId) return;
+  const text = typeof content === 'string' ? content : JSON.stringify(content);
+  fetch('http://localhost:8000/sessions/messages', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ session_id: currentSessionId, role, content: text }),
+  }).catch(() => {});
+}
 
 // 加载已授权的 API 配置
 async function loadApprovedConfigs() {
@@ -303,6 +332,10 @@ async function send() {
   history.push({ role:'user', content });
   attachments = []; renderAttachments();
 
+  // 创建会话（首条消息时）并保存用户消息
+  await ensureSession(text);
+  saveMessage('user', typeof content === 'string' ? content : text);
+
   setInputEnabled(false);
   const bubble = addBubble('assistant');
   bubble.classList.add('cursor');
@@ -321,6 +354,7 @@ async function send() {
     onDone() {
       bubble.classList.remove('cursor');
       history.push({ role:'assistant', content: accumulated });
+      saveMessage('assistant', accumulated);
       setInputEnabled(true);
       userInput.focus();
       // 保存结果到文件
@@ -344,6 +378,7 @@ sendBtn.addEventListener('click', send);
 userInput.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 clearBtn.addEventListener('click', () => {
   history = []; attachments = []; renderAttachments();
+  currentSessionId = null;
   messagesEl.innerHTML = '<p class="empty-hint">发送消息开始对话</p>';
 });
 attachBtn.addEventListener('click', () => fileInput.click());

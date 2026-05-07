@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>历史记录 — 数据平台</title>
+  <link rel="stylesheet" href="../assets/css/platform.css">
+  <style>
+    .split { display: grid; grid-template-columns: 340px 1fr; gap: 20px; height: calc(100vh - var(--header-h) - 60px); }
+    .session-list { overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; }
+    .session-item {
+      padding: 14px 16px; border-bottom: 1px solid var(--border); cursor: pointer;
+      transition: background .15s;
+    }
+    .session-item:last-child { border-bottom: none; }
+    .session-item:hover { background: var(--surface); }
+    .session-item.active { background: var(--green-bg); border-left: 3px solid var(--green); }
+    .session-title { font-size: .9rem; font-weight: 500; color: var(--text); margin-bottom: 4px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-meta { font-size: .78rem; color: var(--text-muted); display: flex; gap: 8px; }
+    .chat-panel {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: #fff; display: flex; flex-direction: column; overflow: hidden;
+    }
+    .chat-panel-header {
+      padding: 14px 18px; border-bottom: 1px solid var(--border);
+      font-size: .9rem; font-weight: 500; background: var(--surface);
+    }
+    .chat-panel-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .bubble { max-width: 78%; padding: 10px 14px; border-radius: 12px; font-size: .9rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+    .bubble-user { background: var(--green); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+    .bubble-assistant { background: var(--surface); border: 1px solid var(--border); align-self: flex-start; border-bottom-left-radius: 4px; }
+    .bubble-time { font-size: .72rem; color: var(--text-muted); margin-top: 3px; }
+    .empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: .9rem; }
+    .filter-bar { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; }
+    .filter-bar select, .filter-bar input { height: 34px; font-size: .85rem; }
+    .filter-bar select { width: 180px; }
+  </style>
+</head>
+<body>
+<div class="breadcrumb">
+  <span class="brand">数据平台</span>
+  <span class="sep">›</span>
+  <a href="#">三方API管理</a>
+  <span class="sep">›</span>
+  <span class="current">历史记录</span>
+  <div class="breadcrumb-right" id="userBar"></div>
+</div>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="sidebar-group open" id="sg1">
+      <div class="sidebar-group-title" onclick="document.getElementById('sg1').classList.toggle('open')">
+        三方API管理 <span class="arrow">›</span>
+      </div>
+      <div class="sidebar-children">
+        <a href="claude.html"  class="sidebar-item">API调用</a>
+        <a href="apply.html"   class="sidebar-item">API申请&审核</a>
+        <a href="keys.html"    class="sidebar-item">密钥管理</a>
+        <a href="stats.html"   class="sidebar-item">使用统计</a>
+        <a href="history.html" class="sidebar-item active">历史记录</a>
+        <a href="users.html"   class="sidebar-item" id="usersLink" style="display:none">用户管理</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="toolbar">
+      <span class="page-title" style="margin:0">历史记录</span>
+    </div>
+
+    <!-- 管理员筛选栏 -->
+    <div class="filter-bar" id="filterBar" style="display:none">
+      <label style="margin:0;color:var(--text-muted);font-size:.85rem">按用户筛选：</label>
+      <select id="userFilter"><option value="">全部用户</option></select>
+    </div>
+
+    <div class="split">
+      <!-- 会话列表 -->
+      <div class="session-list" id="sessionList">
+        <div class="empty-state">加载中…</div>
+      </div>
+
+      <!-- 消息面板 -->
+      <div class="chat-panel">
+        <div class="chat-panel-header" id="panelHeader">请选择一条历史记录</div>
+        <div class="chat-panel-body" id="panelBody">
+          <div class="empty-state">← 从左侧选择对话</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js';
+if (!requireLogin()) throw new Error('redirect');
+
+const user    = getUser();
+const isAdmin = user.role === 'admin';
+const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
+
+document.getElementById('userBar').innerHTML = `
+  <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
+  <button class="logout" id="logoutBtn">退出</button>`;
+document.getElementById('logoutBtn').addEventListener('click', () => logout());
+if (isAdmin) { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; }
+
+let sessions = [];
+let selectedSession = null;
+
+// 管理员显示用户筛选器
+if (isAdmin) {
+  document.getElementById('filterBar').style.display = 'flex';
+  const res = await fetch('http://localhost:8000/admin/users', { headers: ADMIN_HEADERS });
+  const users = await res.json().catch(() => []);
+  const sel = document.getElementById('userFilter');
+  users.forEach(u => {
+    const opt = document.createElement('option');
+    opt.value = u.id; opt.textContent = u.username;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener('change', () => loadSessions());
+}
+
+async function loadSessions() {
+  const list = document.getElementById('sessionList');
+  list.innerHTML = '<div class="empty-state">加载中…</div>';
+  try {
+    let url, headers;
+    if (isAdmin) {
+      const uid = document.getElementById('userFilter').value;
+      url = uid ? `http://localhost:8000/admin/history?user_id=${uid}` : 'http://localhost:8000/admin/history';
+      headers = ADMIN_HEADERS;
+    } else {
+      url = 'http://localhost:8000/history/my';
+      headers = authHeaders();
+    }
+    const res = await fetch(url, { headers });
+    sessions = await res.json().catch(() => []);
+    renderSessions();
+  } catch(e) {
+    list.innerHTML = '<div class="empty-state" style="color:#dc2626">加载失败</div>';
+  }
+}
+
+function renderSessions() {
+  const list = document.getElementById('sessionList');
+  if (!sessions.length) {
+    list.innerHTML = '<div class="empty-state">暂无历史记录</div>';
+    return;
+  }
+  list.innerHTML = '';
+  sessions.forEach(s => {
+    const div = document.createElement('div');
+    div.className = 'session-item' + (selectedSession?.id === s.id ? ' active' : '');
+    const title = s.title || '（无标题）';
+    const meta = [
+      s.username ? `👤 ${s.username}` : '',
+      s.model || '',
+      `${s.msg_count || 0} 条消息`,
+      s.created_at.slice(0,16).replace('T',' '),
+    ].filter(Boolean).join(' · ');
+    div.innerHTML = `<div class="session-title" title="${title}">${title}</div><div class="session-meta">${meta}</div>`;
+    div.addEventListener('click', () => loadMessages(s));
+    list.appendChild(div);
+  });
+}
+
+async function loadMessages(session) {
+  selectedSession = session;
+  renderSessions();
+
+  document.getElementById('panelHeader').textContent =
+    `${session.title || '（无标题）'} · ${session.model || ''} · ${session.created_at.slice(0,16).replace('T',' ')}`;
+
+  const body = document.getElementById('panelBody');
+  body.innerHTML = '<div class="empty-state">加载中…</div>';
+
+  try {
+    const res = await fetch(`http://localhost:8000/history/${session.id}`, { headers: authHeaders() });
+    const data = await res.json();
+    const msgs = data.messages || [];
+    if (!msgs.length) { body.innerHTML = '<div class="empty-state">暂无消息记录</div>'; return; }
+    body.innerHTML = '';
+    msgs.forEach(m => {
+      const wrap = document.createElement('div');
+      wrap.style.display = 'flex';
+      wrap.style.flexDirection = 'column';
+      wrap.style.alignItems = m.role === 'user' ? 'flex-end' : 'flex-start';
+      const bubble = document.createElement('div');
+      bubble.className = `bubble bubble-${m.role}`;
+      bubble.textContent = m.content;
+      const time = document.createElement('div');
+      time.className = 'bubble-time';
+      time.style.textAlign = m.role === 'user' ? 'right' : 'left';
+      time.textContent = m.created_at.slice(0,16).replace('T',' ');
+      wrap.appendChild(bubble);
+      wrap.appendChild(time);
+      body.appendChild(wrap);
+    });
+    body.scrollTop = body.scrollHeight;
+  } catch(e) {
+    body.innerHTML = '<div class="empty-state" style="color:#dc2626">加载失败</div>';
+  }
+}
+
+loadSessions();
+</script>
+</body>
+</html>

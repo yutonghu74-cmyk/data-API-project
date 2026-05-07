@@ -93,6 +93,25 @@ def init_db():
                 error_msg     TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER REFERENCES users(id),
+                config_id  INTEGER REFERENCES api_configs(id),
+                model      TEXT,
+                title      TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER REFERENCES chat_sessions(id),
+                role       TEXT NOT NULL,
+                content    TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
         conn.commit()
         # 初始化默认管理员账号（仅首次，已存在则跳过）
         now = datetime.now(timezone.utc).isoformat()
@@ -581,6 +600,101 @@ def delete_user(user_id: int, x_admin_password: str = Header(default="")):
         conn.execute("DELETE FROM users WHERE id=?", (user_id,))
         conn.commit()
     return {"ok": True}
+
+# ── 对话历史 ──────────────────────────────────────────────
+
+class SessionIn(BaseModel):
+    config_id: int | None = None
+    model: str = ""
+    title: str = ""
+
+class MessageIn(BaseModel):
+    session_id: int
+    role: Literal["user", "assistant"]
+    content: str
+
+@app.post("/sessions")
+def create_session(body: SessionIn, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO chat_sessions (user_id, config_id, model, title, created_at) VALUES (?,?,?,?,?)",
+            (user["id"], body.config_id, body.model, body.title, now)
+        )
+        conn.commit()
+    return {"session_id": cur.lastrowid}
+
+@app.post("/sessions/messages")
+def save_message(body: MessageIn, x_token: str = Header(default="")):
+    get_current_user(x_token)
+    now = datetime.now(timezone.utc).isoformat()
+    # content 若为列表（多模态）则只保存文本部分
+    content = body.content if isinstance(body.content, str) else str(body.content)
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO chat_messages (session_id, role, content, created_at) VALUES (?,?,?,?)",
+            (body.session_id, body.role, content, now)
+        )
+        conn.commit()
+    return {"ok": True}
+
+@app.get("/history/my")
+def my_history(x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT s.*, c.name as config_name,
+                   (SELECT COUNT(*) FROM chat_messages WHERE session_id=s.id) as msg_count
+            FROM chat_sessions s
+            LEFT JOIN api_configs c ON c.id = s.config_id
+            WHERE s.user_id = ?
+            ORDER BY s.created_at DESC LIMIT 100
+        """, (user["id"],)).fetchall()
+    return [dict(r) for r in rows]
+
+@app.get("/history/{session_id}")
+def get_session_messages(session_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        session = conn.execute(
+            "SELECT * FROM chat_sessions WHERE id=?", (session_id,)
+        ).fetchone()
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        # 仅本人或管理员可查看
+        if session["user_id"] != user["id"] and user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="无权限")
+        msgs = conn.execute(
+            "SELECT * FROM chat_messages WHERE session_id=? ORDER BY created_at",
+            (session_id,)
+        ).fetchall()
+    return {"session": dict(session), "messages": [dict(m) for m in msgs]}
+
+@app.get("/admin/history")
+def admin_history(user_id: int | None = None, x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        if user_id:
+            rows = conn.execute("""
+                SELECT s.*, u.username, c.name as config_name,
+                       (SELECT COUNT(*) FROM chat_messages WHERE session_id=s.id) as msg_count
+                FROM chat_sessions s
+                JOIN users u ON u.id = s.user_id
+                LEFT JOIN api_configs c ON c.id = s.config_id
+                WHERE s.user_id = ?
+                ORDER BY s.created_at DESC LIMIT 200
+            """, (user_id,)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT s.*, u.username, c.name as config_name,
+                       (SELECT COUNT(*) FROM chat_messages WHERE session_id=s.id) as msg_count
+                FROM chat_sessions s
+                JOIN users u ON u.id = s.user_id
+                LEFT JOIN api_configs c ON c.id = s.config_id
+                ORDER BY s.created_at DESC LIMIT 200
+            """).fetchall()
+    return [dict(r) for r in rows]
 
 # ── 保存结果到本地文件 ─────────────────────────────────────
 
