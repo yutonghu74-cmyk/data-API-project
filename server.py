@@ -68,11 +68,18 @@ def init_db():
                 base_url   TEXT NOT NULL,
                 api_key    TEXT NOT NULL,
                 provider   TEXT NOT NULL,
+                models     TEXT DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 is_active  INTEGER DEFAULT 1
             )
         """)
+        # 兼容旧库：若 models 列不存在则添加
+        try:
+            conn.execute("ALTER TABLE api_configs ADD COLUMN models TEXT DEFAULT ''")
+            conn.commit()
+        except Exception:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS usage_stats (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,7 +147,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MODELS = ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7"]
+MODELS = ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7"]  # fallback only
 
 class TextBlock(BaseModel):
     type: Literal["text"]
@@ -171,6 +178,15 @@ def health():
 @app.get("/models")
 def models():
     return {"models": MODELS}
+
+@app.get("/configs/{config_id}/models")
+def config_models(config_id: int):
+    """返回指定配置的可用模型列表。"""
+    with get_db() as conn:
+        row = conn.execute("SELECT models FROM api_configs WHERE id=?", (config_id,)).fetchone()
+    if not row or not row["models"]:
+        return {"models": []}
+    return {"models": [m.strip() for m in row["models"].split(",") if m.strip()]}
 
 @app.get("/active-configs")
 def active_configs():
@@ -256,6 +272,7 @@ class ConfigIn(BaseModel):
     base_url: str
     api_key: str
     provider: str
+    models: str = ""
     is_active: int = 1
 
 @app.post("/admin/login")
@@ -280,8 +297,8 @@ def create_config(body: ConfigIn, x_admin_password: str = Header(default="")):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO api_configs (name,base_url,api_key,provider,created_at,updated_at,is_active) VALUES (?,?,?,?,?,?,?)",
-            (body.name, body.base_url, body.api_key, body.provider, now, now, body.is_active)
+            "INSERT INTO api_configs (name,base_url,api_key,provider,models,created_at,updated_at,is_active) VALUES (?,?,?,?,?,?,?,?)",
+            (body.name, body.base_url, body.api_key, body.provider, body.models, now, now, body.is_active)
         )
         conn.commit()
         row = conn.execute("SELECT * FROM api_configs WHERE id=?", (cur.lastrowid,)).fetchone()
@@ -296,13 +313,13 @@ def update_config(config_id: int, body: ConfigIn, x_admin_password: str = Header
     with get_db() as conn:
         if body.api_key and body.api_key != "(unchanged)":
             conn.execute(
-                "UPDATE api_configs SET name=?,base_url=?,api_key=?,provider=?,updated_at=?,is_active=? WHERE id=?",
-                (body.name, body.base_url, body.api_key, body.provider, now, body.is_active, config_id)
+                "UPDATE api_configs SET name=?,base_url=?,api_key=?,provider=?,models=?,updated_at=?,is_active=? WHERE id=?",
+                (body.name, body.base_url, body.api_key, body.provider, body.models, now, body.is_active, config_id)
             )
         else:
             conn.execute(
-                "UPDATE api_configs SET name=?,base_url=?,provider=?,updated_at=?,is_active=? WHERE id=?",
-                (body.name, body.base_url, body.provider, now, body.is_active, config_id)
+                "UPDATE api_configs SET name=?,base_url=?,provider=?,models=?,updated_at=?,is_active=? WHERE id=?",
+                (body.name, body.base_url, body.provider, body.models, now, body.is_active, config_id)
             )
         conn.commit()
         row = conn.execute("SELECT * FROM api_configs WHERE id=?", (config_id,)).fetchone()

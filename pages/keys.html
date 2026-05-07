@@ -18,7 +18,6 @@
 </div>
 
 <div class="layout">
-  <!-- 侧边栏 -->
   <div class="sidebar">
     <div class="sidebar-group open" id="sg1">
       <div class="sidebar-group-title" onclick="document.getElementById('sg1').classList.toggle('open')">
@@ -33,27 +32,62 @@
     </div>
   </div>
 
-  <!-- 主内容 -->
   <div class="main">
-    <p class="page-title">密钥管理</p>
-
-    <div class="card">
-      <p style="color:var(--text-muted);font-size:.9rem;line-height:1.8">
-        密钥由管理员统一管理。如需新增或修改 API 密钥，请联系管理员在
-        <a href="admin.html" style="color:var(--green)">管理员面板</a> 中操作。
-      </p>
-
-      <div style="margin-top:24px">
-        <p style="font-size:.85rem;font-weight:600;margin-bottom:12px;color:var(--text)">我的已授权 API</p>
+    <!-- 管理员：显示完整密钥管理 -->
+    <div id="adminSection" style="display:none">
+      <div class="toolbar">
+        <span class="page-title" style="margin:0">密钥管理</span>
+        <button class="btn btn-primary" id="addConfigBtn">+ 新增配置</button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>名称</th><th>供应商</th><th>Base URL</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+              <tr><th>名称</th><th>供应商</th><th>密钥</th><th>可用模型</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
             </thead>
-            <tbody id="keysTbody"></tbody>
+            <tbody id="adminTbody"></tbody>
           </table>
         </div>
       </div>
+    </div>
+
+    <!-- 普通用户：显示已授权列表 -->
+    <div id="userSection" style="display:none">
+      <p class="page-title">密钥管理</p>
+      <div class="card" style="margin-bottom:16px;color:var(--text-muted);font-size:.9rem;line-height:1.8">
+        密钥由管理员统一管理。如需申请新 API 访问权限，请前往
+        <a href="apply.html" style="color:var(--green)">API申请&审核</a>。
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>名称</th><th>供应商</th><th>可用模型</th><th>Base URL</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+            </thead>
+            <tbody id="userTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 新增/编辑弹窗（管理员） -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h3 id="modalTitle">新增配置</h3>
+    <div class="form-group"><label>名称</label><input id="fName" placeholder="如 Claude API"></div>
+    <div class="form-group"><label>供应商</label><input id="fProvider" placeholder="如 anthropic"></div>
+    <div class="form-group"><label>Base URL</label><input id="fBaseUrl" placeholder="https://api.anthropic.com/v1"></div>
+    <div class="form-group"><label>API Key</label><input id="fApiKey" type="password" placeholder="sk-ant-...（编辑时留空则不修改）"></div>
+    <div class="form-group">
+      <label>可用模型 <span style="color:var(--text-muted);font-weight:400">（多个用逗号分隔）</span></label>
+      <textarea id="fModels" rows="3" placeholder="claude-sonnet-4-6,claude-haiku-4-5-20251001,claude-opus-4-7"></textarea>
+    </div>
+    <p style="color:#dc2626;font-size:.83rem;min-height:18px" id="modalError"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="cancelBtn">取消</button>
+      <button class="btn btn-primary"   id="saveBtn">保存</button>
     </div>
   </div>
 </div>
@@ -62,36 +96,131 @@
 import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js';
 if (!requireLogin()) throw new Error('redirect');
 
-const user = getUser();
+const user    = getUser();
+const isAdmin = user.role === 'admin';
+const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
+
 document.getElementById('userBar').innerHTML = `
-  <span class="username">${user.username}</span>
+  <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
   <button class="logout" id="logoutBtn">退出</button>`;
 document.getElementById('logoutBtn').addEventListener('click', () => logout());
 
-async function loadKeys() {
-  const tbody = document.getElementById('keysTbody');
-  try {
-    const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
-    const list = await res.json();
-    if (!list.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px">暂无已授权的密钥，请先<a href="apply.html" style="color:var(--green);margin:0 4px">提交申请</a>并等待审核通过</td></tr>';
-      return;
-    }
-    tbody.innerHTML = list.map(c => `
-      <tr>
-        <td><strong>${c.name}</strong></td>
-        <td>${c.provider}</td>
-        <td style="color:var(--text-muted);font-size:.82rem">${c.base_url}</td>
-        <td><span class="badge badge-green">已启用</span></td>
-        <td>${c.created_at ? c.created_at.slice(0,10) : '—'}</td>
-        <td><a href="stats.html" class="btn-link">查看统计</a></td>
-      </tr>`).join('');
-  } catch(e) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#dc2626;padding:32px">加载失败，请确认服务器已启动</td></tr>';
-  }
+if (isAdmin) {
+  document.getElementById('adminSection').style.display = 'block';
+  loadAdminConfigs();
+} else {
+  document.getElementById('userSection').style.display = 'block';
+  loadUserKeys();
 }
 
-loadKeys();
+// ── 管理员：密钥管理 ──────────────────────────────────────
+let editingId = null;
+let allConfigs = [];
+
+async function loadAdminConfigs() {
+  const res = await fetch('http://localhost:8000/admin/configs', { headers: ADMIN_HEADERS });
+  allConfigs = await res.json().catch(() => []);
+  const tbody = document.getElementById('adminTbody');
+  if (!allConfigs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px">暂无配置</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  allConfigs.forEach(c => {
+    const models = c.models ? c.models.split(',').filter(Boolean).join('、') : '—';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${c.name}</strong></td>
+      <td>${c.provider}</td>
+      <td><code style="font-size:.82rem">${c.api_key}</code></td>
+      <td style="font-size:.82rem;color:var(--text-muted)">${models}</td>
+      <td><span class="badge ${c.is_active ? 'badge-green' : 'badge-gray'}">${c.is_active ? '启用' : '禁用'}</span></td>
+      <td>${c.created_at.slice(0,10)}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:.8rem" data-edit="${c.id}">编辑</button>
+        <button class="btn btn-danger"    style="padding:4px 10px;font-size:.8rem" data-del="${c.id}">删除</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openEdit(allConfigs.find(x => x.id == b.dataset.edit))));
+  tbody.querySelectorAll('[data-del]').forEach(b  => b.addEventListener('click', () => confirmDel(b.dataset.del)));
+}
+
+document.getElementById('addConfigBtn').addEventListener('click', () => {
+  editingId = null;
+  document.getElementById('modalTitle').textContent = '新增配置';
+  ['fName','fProvider','fBaseUrl','fApiKey','fModels'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('modalError').textContent = '';
+  document.getElementById('modalBg').classList.add('open');
+});
+
+document.getElementById('cancelBtn').addEventListener('click', () => document.getElementById('modalBg').classList.remove('open'));
+
+function openEdit(c) {
+  editingId = c.id;
+  document.getElementById('modalTitle').textContent = '编辑配置';
+  document.getElementById('fName').value     = c.name;
+  document.getElementById('fProvider').value = c.provider;
+  document.getElementById('fBaseUrl').value  = c.base_url;
+  document.getElementById('fApiKey').value   = '';
+  document.getElementById('fModels').value   = c.models || '';
+  document.getElementById('modalError').textContent = '';
+  document.getElementById('modalBg').classList.add('open');
+}
+
+document.getElementById('saveBtn').addEventListener('click', async () => {
+  const err      = document.getElementById('modalError');
+  const name     = document.getElementById('fName').value.trim();
+  const provider = document.getElementById('fProvider').value.trim();
+  const base_url = document.getElementById('fBaseUrl').value.trim();
+  const api_key  = document.getElementById('fApiKey').value.trim();
+  const models   = document.getElementById('fModels').value.trim();
+  if (!name || !provider || !base_url) { err.textContent = '名称、供应商、Base URL 不能为空'; return; }
+  if (!editingId && !api_key) { err.textContent = 'API Key 不能为空'; return; }
+  const body = { name, provider, base_url, api_key: api_key || '(unchanged)', models, is_active: 1 };
+  try {
+    if (editingId)
+      await fetch(`http://localhost:8000/admin/configs/${editingId}`, { method:'PUT', headers:ADMIN_HEADERS, body:JSON.stringify(body) });
+    else
+      await fetch('http://localhost:8000/admin/configs', { method:'POST', headers:ADMIN_HEADERS, body:JSON.stringify(body) });
+    document.getElementById('modalBg').classList.remove('open');
+    loadAdminConfigs();
+  } catch(e) { err.textContent = '保存失败'; }
+});
+
+async function confirmDel(id) {
+  if (!confirm('确定删除此配置及所有关联统计记录？')) return;
+  await fetch(`http://localhost:8000/admin/configs/${id}`, { method:'DELETE', headers:ADMIN_HEADERS });
+  loadAdminConfigs();
+}
+
+// ── 普通用户：已授权密钥 ──────────────────────────────────
+async function loadUserKeys() {
+  const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
+  const list = await res.json().catch(() => []);
+  const tbody = document.getElementById('userTbody');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px">暂无已授权的密钥，请先<a href="apply.html" style="color:var(--green);margin:0 4px">提交申请</a></td></tr>';
+    return;
+  }
+  // 批量获取每个 config 的模型列表
+  const modelMap = {};
+  await Promise.all(list.map(async c => {
+    const r = await fetch(`http://localhost:8000/configs/${c.id}/models`);
+    const d = await r.json().catch(() => ({ models: [] }));
+    modelMap[c.id] = d.models;
+  }));
+  tbody.innerHTML = list.map(c => `
+    <tr>
+      <td><strong>${c.name}</strong></td>
+      <td>${c.provider}</td>
+      <td style="font-size:.82rem;color:var(--text-muted)">${(modelMap[c.id]||[]).join('、') || '—'}</td>
+      <td style="font-size:.82rem;color:var(--text-muted)">${c.base_url}</td>
+      <td><span class="badge badge-green">已启用</span></td>
+      <td>${c.created_at ? c.created_at.slice(0,10) : '—'}</td>
+      <td><a href="stats.html" class="btn-link">查看统计</a></td>
+    </tr>`).join('');
+}
 </script>
 </body>
 </html>
