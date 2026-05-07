@@ -164,13 +164,15 @@ initSidebar();
 
 const user    = await refreshUser();
 const isAdmin = user.role === 'admin';
+if (!isAdmin) { window.location.href = '/pages/claude.html'; throw new Error('no access'); }
+
 const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
 
 document.getElementById('userBar').innerHTML = `
-  <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
+  <span class="username">${user.username}（管理员）</span>
   <button class="logout" id="logoutBtn">退出</button>`;
 document.getElementById('logoutBtn').addEventListener('click', () => logout());
-if (isAdmin) { const l = document.getElementById('usersLink'); if (l) l.style.display = 'block'; }
+const l = document.getElementById('usersLink'); if (l) l.style.display = 'block';
 
 if (isAdmin) {
   document.getElementById('adminSection').style.display = 'block';
