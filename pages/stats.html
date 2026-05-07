@@ -60,6 +60,7 @@ document.getElementById('userBar').innerHTML = `
   <span class="username">${user.username}</span>
   <button class="logout" id="logoutBtn">退出</button>`;
 document.getElementById('logoutBtn').addEventListener('click', () => logout());
+if (user.role === 'admin') { const l = document.getElementById('usersLink'); if (l) l.style.display = 'block'; }
 
 async function loadStats() {
   const tbody = document.getElementById('statsTbody');

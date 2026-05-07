@@ -40,6 +40,7 @@
         <a href="apply.html"   class="sidebar-item active">API申请&审核</a>
         <a href="keys.html"    class="sidebar-item">密钥管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
+        <a href="users.html"   class="sidebar-item" id="usersLink" style="display:none">用户管理</a>
       </div>
     </div>
   </div>
@@ -132,6 +133,7 @@ document.getElementById('userBar').innerHTML = `
   <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
   <button class="logout" id="logoutBtn">退出</button>`;
 document.getElementById('logoutBtn').addEventListener('click', () => logout());
+if (isAdmin) { const l = document.getElementById('usersLink'); if (l) l.style.display = 'block'; }
 
 // 管理员额外插入「审核管理」tab
 if (isAdmin) {

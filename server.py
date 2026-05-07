@@ -529,7 +529,7 @@ def admin_review_request(req_id: int, body: ReviewIn, x_admin_password: str = He
         conn.commit()
     return {"ok": True}
 
-# ── Admin: 用户列表 ───────────────────────────────────────
+# ── Admin: 用户管理 ───────────────────────────────────────
 
 @app.get("/admin/users")
 def list_users(x_admin_password: str = Header(default="")):
@@ -537,6 +537,50 @@ def list_users(x_admin_password: str = Header(default="")):
     with get_db() as conn:
         rows = conn.execute("SELECT id, username, role, created_at FROM users ORDER BY id").fetchall()
     return [dict(r) for r in rows]
+
+class UserRoleIn(BaseModel):
+    role: Literal["user", "admin"]
+
+@app.put("/admin/users/{user_id}/role")
+def update_user_role(user_id: int, body: UserRoleIn, x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        conn.execute("UPDATE users SET role=? WHERE id=?", (body.role, user_id))
+        conn.commit()
+    return {"ok": True}
+
+class ResetPwdIn(BaseModel):
+    password: str
+
+@app.put("/admin/users/{user_id}/password")
+def reset_user_password(user_id: int, body: ResetPwdIn, x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少6位")
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        conn.execute("UPDATE users SET password=? WHERE id=?", (hash_password(body.password), user_id))
+        conn.commit()
+    return {"ok": True}
+
+@app.delete("/admin/users/{user_id}")
+def delete_user(user_id: int, x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        # 不允许删除最后一个管理员
+        admin_count = conn.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0]
+        user = conn.execute("SELECT role FROM users WHERE id=?", (user_id,)).fetchone()
+        if user and user["role"] == "admin" and admin_count <= 1:
+            raise HTTPException(status_code=400, detail="不能删除唯一的管理员账号")
+        conn.execute("DELETE FROM user_tokens WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+        conn.commit()
+    return {"ok": True}
 
 # ── 保存结果到本地文件 ─────────────────────────────────────
 

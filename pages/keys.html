@@ -104,6 +104,7 @@ document.getElementById('userBar').innerHTML = `
   <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
   <button class="logout" id="logoutBtn">退出</button>`;
 document.getElementById('logoutBtn').addEventListener('click', () => logout());
+if (isAdmin) { const l = document.getElementById('usersLink'); if (l) l.style.display = 'block'; }
 
 if (isAdmin) {
   document.getElementById('adminSection').style.display = 'block';
