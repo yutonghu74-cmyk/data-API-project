@@ -501,6 +501,22 @@ def admin_review_request(req_id: int, body: ReviewIn, x_admin_password: str = He
         conn.commit()
     return {"ok": True}
 
+# ── 保存结果到本地文件 ─────────────────────────────────────
+
+class SaveResultIn(BaseModel):
+    path: str
+    content: str
+
+@app.post("/save-result")
+def save_result(body: SaveResultIn, x_token: str = Header(default="")):
+    get_current_user(x_token)
+    try:
+        with open(body.path, 'w', encoding='utf-8') as f:
+            f.write(body.content)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)

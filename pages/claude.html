@@ -3,393 +3,352 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Claude Chat</title>
-  <link rel="stylesheet" href="../assets/css/base.css">
+  <title>API调用 — 数据平台</title>
+  <link rel="stylesheet" href="../assets/css/platform.css">
   <style>
-    .page-header {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      padding: 20px 0 28px;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 24px;
-    }
-    .page-header a { color: var(--text-muted); text-decoration: none; font-size: .9rem; }
-    .page-header a:hover { color: var(--text); }
-    .page-header h1 { font-size: 1.1rem; font-weight: 600; }
-
-    .config-card { margin-bottom: 16px; display: grid; gap: 14px; }
-    .config-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-
+    .chat-wrap { display: flex; flex-direction: column; height: calc(100vh - var(--header-h) - 56px); }
+    .config-bar { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px; }
     .messages {
-      height: 420px;
-      overflow-y: auto;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      margin-bottom: 16px;
+      flex: 1; overflow-y: auto;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px;
+      display: flex; flex-direction: column; gap: 12px;
+      margin-bottom: 10px;
     }
-
     .bubble {
-      max-width: 80%;
-      padding: 10px 14px;
-      border-radius: 12px;
-      font-size: .92rem;
-      line-height: 1.6;
-      white-space: pre-wrap;
-      word-break: break-word;
+      max-width: 80%; padding: 10px 14px; border-radius: 12px;
+      font-size: .92rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
     }
     .bubble-user {
-      background: var(--accent);
-      color: #fff;
-      align-self: flex-end;
-      border-bottom-right-radius: 4px;
+      background: var(--green); color: #fff;
+      align-self: flex-end; border-bottom-right-radius: 4px;
     }
     .bubble-assistant {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      align-self: flex-start;
-      border-bottom-left-radius: 4px;
+      background: #fff; border: 1px solid var(--border);
+      align-self: flex-start; border-bottom-left-radius: 4px;
     }
     .bubble-error {
-      background: rgba(248,113,113,.1);
-      border: 1px solid var(--error);
-      color: var(--error);
-      align-self: flex-start;
-      border-radius: var(--radius);
-      font-size: .85rem;
+      background: #fee2e2; border: 1px solid #fecaca; color: #dc2626;
+      align-self: flex-start; border-radius: var(--radius); font-size: .85rem;
     }
-    .cursor::after {
-      content: '▋';
-      animation: blink .7s step-end infinite;
-    }
+    .cursor::after { content: '▋'; animation: blink .7s step-end infinite; }
     @keyframes blink { 50% { opacity: 0; } }
-
-    .input-row {
-      display: flex;
-      gap: 10px;
-      align-items: flex-end;
-    }
+    .input-area { display: flex; flex-direction: column; gap: 6px; }
+    .input-row { display: flex; gap: 8px; align-items: flex-end; }
     .input-row textarea {
-      flex: 1;
-      resize: none;
-      height: 44px;
-      line-height: 1.5;
-      padding: 10px 14px;
+      flex: 1; resize: none; height: 44px; line-height: 1.5;
+      font-family: var(--font);
     }
-    .btn-secondary {
-      background: var(--border);
-      color: var(--text);
-    }
-    .btn-secondary:hover { background: var(--surface); }
-
-    .empty-hint {
-      color: var(--text-muted);
-      font-size: .85rem;
-      text-align: center;
-      margin: auto;
-    }
-    .attachments-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-bottom: 8px;
-    }
+    .attachments-row { display: flex; flex-wrap: wrap; gap: 6px; }
     .attachment-tag {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 3px 8px;
-      font-size: .8rem;
-      color: var(--text);
+      display: flex; align-items: center; gap: 5px;
+      background: #fff; border: 1px solid var(--border);
+      border-radius: 6px; padding: 3px 8px; font-size: .8rem;
     }
     .attachment-tag button {
-      background: none;
-      color: var(--text-muted);
-      padding: 0 2px;
-      font-size: .85rem;
-      line-height: 1;
-      border-radius: 3px;
-      min-width: unset;
+      background: none; color: var(--text-muted); padding: 0 2px;
+      font-size: .85rem; border-radius: 3px;
     }
-    .attachment-tag button:hover { color: var(--error); background: none; }
-    .drag-over {
-      border-color: var(--accent) !important;
-      background: rgba(108,124,255,.06) !important;
+    .attachment-tag button:hover { color: #dc2626; }
+    .drag-over { border-color: var(--green) !important; background: var(--green-bg) !important; }
+    .empty-hint { color: var(--text-muted); font-size: .85rem; text-align: center; margin: auto; }
+    .no-api-hint {
+      flex: 1; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 12px; color: var(--text-muted);
     }
+    .no-api-hint a { color: var(--green); }
+    .save-row { display: flex; align-items: center; gap: 8px; font-size: .83rem; color: var(--text-muted); }
+    .save-row input { width: 280px; height: 32px; font-size: .83rem; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="page-header">
-      <a href="../index.html">← 返回</a>
-      <h1>Claude Chat</h1>
-    </div>
+<!-- 面包屑 -->
+<div class="breadcrumb">
+  <span class="brand">数据平台</span>
+  <span class="sep">›</span>
+  <a href="#">三方API管理</a>
+  <span class="sep">›</span>
+  <span class="current">API调用</span>
+  <div class="breadcrumb-right" id="userBar"></div>
+</div>
 
-    <div class="card config-card">
-      <div class="form-group" style="margin:0">
-        <label>System Prompt</label>
-        <textarea id="systemPrompt" rows="2" placeholder="可选：设置助手角色或背景…" style="resize:vertical"></textarea>
+<div class="layout">
+  <!-- 侧边栏 -->
+  <div class="sidebar">
+    <div class="sidebar-group open" id="sg1">
+      <div class="sidebar-group-title" onclick="document.getElementById('sg1').classList.toggle('open')">
+        三方API管理 <span class="arrow">›</span>
       </div>
-      <div class="config-row">
-        <div class="form-group" style="margin:0">
-          <label>Model</label>
-          <select id="modelSelect"></select>
-        </div>
-        <div class="form-group" style="margin:0">
-          <label>API 配置</label>
-          <select id="configSelect"><option value="">— 未配置 —</option></select>
-        </div>
+      <div class="sidebar-children">
+        <a href="claude.html"  class="sidebar-item active">API调用</a>
+        <a href="apply.html"   class="sidebar-item">API申请&审核</a>
+        <a href="keys.html"    class="sidebar-item">密钥管理</a>
+        <a href="stats.html"   class="sidebar-item">使用统计</a>
       </div>
-    </div>
-
-    <div class="messages" id="messages">
-      <p class="empty-hint">发送消息开始对话</p>
-    </div>
-
-    <div class="attachments-row" id="attachmentsRow"></div>
-    <div class="input-row">
-      <textarea id="userInput" placeholder="输入消息… (Enter 发送，Shift+Enter 换行)"></textarea>
-      <input type="file" id="fileInput" multiple
-             accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/csv,text/markdown,.md"
-             style="display:none">
-      <button class="btn-secondary" id="attachBtn" title="附加文件">📎</button>
-      <button class="btn-primary" id="sendBtn">发送</button>
-      <button class="btn-secondary" id="clearBtn">清空</button>
     </div>
   </div>
 
-  <script type="module">
-    import { streamChat, fetchModels } from '../assets/js/stream.js';
+  <!-- 主内容 -->
+  <div class="main" style="padding-bottom:0">
+    <div class="chat-wrap">
 
-    const messagesEl     = document.getElementById('messages');
-    const userInput      = document.getElementById('userInput');
-    const sendBtn        = document.getElementById('sendBtn');
-    const clearBtn       = document.getElementById('clearBtn');
-    const modelSelect    = document.getElementById('modelSelect');
-    const systemPrompt   = document.getElementById('systemPrompt');
-    const configSelect   = document.getElementById('configSelect');
-    const attachmentsRow = document.getElementById('attachmentsRow');
-    const fileInput      = document.getElementById('fileInput');
-    const attachBtn      = document.getElementById('attachBtn');
+      <!-- 配置栏 -->
+      <div class="config-bar">
+        <div class="form-group" style="margin:0">
+          <label>API 配置</label>
+          <select id="configSelect"><option value="">— 暂无可用 API —</option></select>
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>模型</label>
+          <select id="modelSelect"></select>
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>System Prompt</label>
+          <input id="systemPrompt" placeholder="可选：设置助手角色…">
+        </div>
+      </div>
 
-    const ACCEPTED_TYPES = {
-      'image/jpeg': 'image', 'image/png': 'image',
-      'image/gif': 'image',  'image/webp': 'image',
-      'application/pdf': 'document',
-      'text/plain': 'document', 'text/csv': 'document', 'text/markdown': 'document',
-    };
-    const MAX_SIZE = 20 * 1024 * 1024;
+      <!-- 对话区 -->
+      <div class="messages" id="messages">
+        <p class="empty-hint">发送消息开始对话</p>
+      </div>
 
-    let history = [];
-    let attachments = [];
-    // 加载所有激活的 API 配置到下拉框
-    fetch('http://localhost:8000/active-configs')
-      .then(r => r.json())
-      .then(configs => {
-        configs.forEach(c => {
-          const opt = document.createElement('option');
-          opt.value = c.id;
-          opt.textContent = c.name;
-          configSelect.appendChild(opt);
-        });
-        if (configs.length > 0) configSelect.value = configs[0].id;
-      })
-      .catch(() => {});
+      <!-- 输入区 -->
+      <div class="input-area">
+        <div class="attachments-row" id="attachmentsRow"></div>
+        <div class="input-row">
+          <textarea id="userInput" placeholder="输入消息… (Enter 发送，Shift+Enter 换行)"></textarea>
+          <input type="file" id="fileInput" multiple
+                 accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/csv,text/markdown,.md"
+                 style="display:none">
+          <button class="btn btn-secondary" id="attachBtn" title="附加文件">📎</button>
+          <button class="btn btn-primary"   id="sendBtn">发送</button>
+          <button class="btn btn-secondary" id="clearBtn">清空</button>
+        </div>
+        <div class="save-row">
+          <span>保存结果到：</span>
+          <input id="savePath" placeholder="留空则不保存，如 /Users/me/result.txt">
+        </div>
+      </div>
 
-    fetchModels()
-      .then(models => {
-        models.forEach(m => {
-          const opt = document.createElement('option');
-          opt.value = m;
-          opt.textContent = m;
-          modelSelect.appendChild(opt);
-        });
-        const sonnetOpt = [...modelSelect.options].find(o => o.value.includes('sonnet'));
-        if (sonnetOpt) sonnetOpt.selected = true;
-      })
-      .catch(() => {
-        ['claude-haiku-4-5-20251001','claude-sonnet-4-6','claude-opus-4-7'].forEach(m => {
-          const opt = document.createElement('option');
-          opt.value = m; opt.textContent = m;
-          modelSelect.appendChild(opt);
-        });
-        const sonnetOpt = [...modelSelect.options].find(o => o.value.includes('sonnet'));
-        if (sonnetOpt) sonnetOpt.selected = true;
-      });
+    </div>
+  </div>
+</div>
 
-    function addBubble(role, text = '') {
-      const empty = messagesEl.querySelector('.empty-hint');
-      if (empty) empty.remove();
-      const div = document.createElement('div');
-      div.className = `bubble bubble-${role}`;
-      div.textContent = text;
-      messagesEl.appendChild(div);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      return div;
-    }
+<script type="module">
+import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js';
+import { streamChat, fetchModels } from '../assets/js/stream.js';
 
-    function addError(msg) {
-      const div = document.createElement('div');
-      div.className = 'bubble bubble-error';
-      div.textContent = msg;
-      messagesEl.appendChild(div);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-    }
+if (!requireLogin()) throw new Error('redirect');
 
-    function readFileAsBase64(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload  = () => resolve(reader.result.split(',')[1]);
-        reader.onerror = () => reject(new Error(`文件读取失败：${file.name}`));
-        reader.readAsDataURL(file);
-      });
-    }
+const user = getUser();
+document.getElementById('userBar').innerHTML = `
+  <span class="username">${user.username}</span>
+  <button class="logout" id="logoutBtn">退出</button>`;
+document.getElementById('logoutBtn').addEventListener('click', () => logout());
 
-    async function processFiles(files) {
-      for (const file of files) {
-        if (file.type.startsWith('video/')) {
-          addError('不支持视频文件，请上传图片或文档'); continue;
-        }
-        if (!ACCEPTED_TYPES[file.type]) {
-          addError(`不支持的文件类型：${file.name}`); continue;
-        }
-        if (file.size > MAX_SIZE) {
-          addError(`文件超过 20MB 限制：${file.name}`); continue;
-        }
-        try {
-          const base64 = await readFileAsBase64(file);
-          attachments.push({ name: file.name, mimeType: file.type, base64 });
-          renderAttachments();
-        } catch (err) { addError(err.message); }
-      }
-    }
+const messagesEl    = document.getElementById('messages');
+const userInput     = document.getElementById('userInput');
+const sendBtn       = document.getElementById('sendBtn');
+const clearBtn      = document.getElementById('clearBtn');
+const modelSelect   = document.getElementById('modelSelect');
+const systemPrompt  = document.getElementById('systemPrompt');
+const configSelect  = document.getElementById('configSelect');
+const attachmentsRow = document.getElementById('attachmentsRow');
+const fileInput     = document.getElementById('fileInput');
+const attachBtn     = document.getElementById('attachBtn');
+const savePath      = document.getElementById('savePath');
 
-    function renderAttachments() {
-      attachmentsRow.innerHTML = '';
-      attachments.forEach((att, i) => {
-        const icon = att.mimeType.startsWith('image/') ? '🖼️' : '📄';
-        const tag  = document.createElement('div');
-        tag.className = 'attachment-tag';
-        const span = document.createElement('span');
-        span.textContent = `${icon} ${att.name}`;
-        const btn = document.createElement('button');
-        btn.textContent = '✕';
-        btn.addEventListener('click', () => {
-          attachments.splice(i, 1);
-          renderAttachments();
-        });
-        tag.appendChild(span);
-        tag.appendChild(btn);
-        attachmentsRow.appendChild(tag);
-      });
-    }
+const ACCEPTED_TYPES = {
+  'image/jpeg':'image','image/png':'image','image/gif':'image','image/webp':'image',
+  'application/pdf':'document','text/plain':'document','text/csv':'document','text/markdown':'document',
+};
+const MAX_SIZE = 20 * 1024 * 1024;
+let history = [];
+let attachments = [];
 
-    function setInputEnabled(enabled) {
-      userInput.disabled  = !enabled;
-      sendBtn.disabled    = !enabled;
-      attachBtn.disabled  = !enabled;
-      fileInput.disabled  = !enabled;
-    }
-
-    async function send() {
-      const text = userInput.value.trim();
-      if (!text && attachments.length === 0) return;
-
-      userInput.value = '';
-
-      let content;
-      if (attachments.length === 0) {
-        content = text;
-      } else {
-        content = [];
-        if (text) content.push({ type: 'text', text });
-        for (const att of attachments) {
-          if (att.mimeType.startsWith('image/')) {
-            content.push({ type: 'image', source: { type: 'base64', media_type: att.mimeType, data: att.base64 } });
-          } else if (att.mimeType === 'application/pdf') {
-            content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: att.base64 } });
-          } else {
-            const rawText = atob(att.base64);
-            content.push({ type: 'document', source: { type: 'text', media_type: 'text/plain', data: rawText } });
-          }
-        }
-      }
-
-      const displayText = text + (attachments.length > 0 ? `\n[📎 ${attachments.length} 个附件]` : '');
-      addBubble('user', displayText);
-      history.push({ role: 'user', content });
-
-      attachments = [];
-      renderAttachments();
-
+// 加载已授权的 API 配置
+async function loadApprovedConfigs() {
+  try {
+    const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
+    const list = await res.json();
+    configSelect.innerHTML = '';
+    if (!list.length) {
+      configSelect.innerHTML = '<option value="">— 暂无可用 API，请先申请 —</option>';
       setInputEnabled(false);
-      const assistantBubble = addBubble('assistant');
-      assistantBubble.classList.add('cursor');
-      let accumulated = '';
-
-      await streamChat({
-        messages:  history,
-        model:     modelSelect.value,
-        system:    systemPrompt.value.trim(),
-        config_id: configSelect.value ? parseInt(configSelect.value) : null,
-        onToken(chunk) {
-          accumulated += chunk;
-          assistantBubble.textContent = accumulated;
-          messagesEl.scrollTop = messagesEl.scrollHeight;
-        },
-        onDone() {
-          assistantBubble.classList.remove('cursor');
-          history.push({ role: 'assistant', content: accumulated });
-          setInputEnabled(true);
-          userInput.focus();
-        },
-        onError(err) {
-          assistantBubble.remove();
-          history.pop();
-          addError(err);
-          setInputEnabled(true);
-        },
-      });
+      messagesEl.innerHTML = `<div class="no-api-hint">
+        <p>暂无可用 API</p>
+        <p><a href="apply.html">前往申请 →</a></p>
+      </div>`;
+      return;
     }
-
-    sendBtn.addEventListener('click', send);
-
-    userInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    list.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id; opt.textContent = c.name;
+      configSelect.appendChild(opt);
     });
+  } catch(e) { console.error(e); }
+}
 
-    clearBtn.addEventListener('click', () => {
-      history = [];
-      attachments = [];
+// 加载模型列表
+fetchModels()
+  .then(models => {
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      modelSelect.appendChild(opt);
+    });
+    const s = [...modelSelect.options].find(o => o.value.includes('sonnet'));
+    if (s) s.selected = true;
+  })
+  .catch(() => {
+    ['claude-haiku-4-5-20251001','claude-sonnet-4-6','claude-opus-4-7'].forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      modelSelect.appendChild(opt);
+    });
+    const s = [...modelSelect.options].find(o => o.value.includes('sonnet'));
+    if (s) s.selected = true;
+  });
+
+loadApprovedConfigs();
+
+function addBubble(role, text = '') {
+  const empty = messagesEl.querySelector('.empty-hint, .no-api-hint');
+  if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = `bubble bubble-${role}`;
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+function addError(msg) {
+  const div = document.createElement('div');
+  div.className = 'bubble bubble-error';
+  div.textContent = msg;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = () => reject(new Error(`文件读取失败：${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function processFiles(files) {
+  for (const file of files) {
+    if (file.type.startsWith('video/')) { addError('不支持视频文件'); continue; }
+    if (!ACCEPTED_TYPES[file.type]) { addError(`不支持的文件类型：${file.name}`); continue; }
+    if (file.size > MAX_SIZE) { addError(`文件超过 20MB：${file.name}`); continue; }
+    try {
+      const base64 = await readFileAsBase64(file);
+      attachments.push({ name: file.name, mimeType: file.type, base64 });
       renderAttachments();
-      messagesEl.innerHTML = '<p class="empty-hint">发送消息开始对话</p>';
-    });
+    } catch (err) { addError(err.message); }
+  }
+}
 
-    attachBtn.addEventListener('click', () => fileInput.click());
+function renderAttachments() {
+  attachmentsRow.innerHTML = '';
+  attachments.forEach((att, i) => {
+    const icon = att.mimeType.startsWith('image/') ? '🖼️' : '📄';
+    const tag = document.createElement('div');
+    tag.className = 'attachment-tag';
+    const span = document.createElement('span'); span.textContent = `${icon} ${att.name}`;
+    const btn = document.createElement('button'); btn.textContent = '✕';
+    btn.addEventListener('click', () => { attachments.splice(i,1); renderAttachments(); });
+    tag.appendChild(span); tag.appendChild(btn);
+    attachmentsRow.appendChild(tag);
+  });
+}
 
-    fileInput.addEventListener('change', () => {
-      processFiles([...fileInput.files]);
-      fileInput.value = '';
-    });
+function setInputEnabled(enabled) {
+  userInput.disabled = !enabled;
+  sendBtn.disabled   = !enabled;
+  attachBtn.disabled = !enabled;
+  fileInput.disabled = !enabled;
+}
 
-    messagesEl.addEventListener('dragover', e => {
-      e.preventDefault();
-      messagesEl.classList.add('drag-over');
-    });
-    messagesEl.addEventListener('dragleave', () => messagesEl.classList.remove('drag-over'));
-    messagesEl.addEventListener('drop', e => {
-      e.preventDefault();
-      messagesEl.classList.remove('drag-over');
-      processFiles([...e.dataTransfer.files]);
-    });
-  </script>
+async function send() {
+  const text = userInput.value.trim();
+  if (!text && attachments.length === 0) return;
+  if (!configSelect.value) { addError('请先在管理员面板配置 API Key，或等待申请审核通过'); return; }
+
+  userInput.value = '';
+  let content;
+  if (attachments.length === 0) {
+    content = text;
+  } else {
+    content = [];
+    if (text) content.push({ type:'text', text });
+    for (const att of attachments) {
+      if (att.mimeType.startsWith('image/'))
+        content.push({ type:'image', source:{ type:'base64', media_type:att.mimeType, data:att.base64 } });
+      else if (att.mimeType === 'application/pdf')
+        content.push({ type:'document', source:{ type:'base64', media_type:'application/pdf', data:att.base64 } });
+      else
+        content.push({ type:'document', source:{ type:'text', media_type:'text/plain', data:atob(att.base64) } });
+    }
+  }
+
+  addBubble('user', text + (attachments.length > 0 ? `\n[📎 ${attachments.length} 个附件]` : ''));
+  history.push({ role:'user', content });
+  attachments = []; renderAttachments();
+
+  setInputEnabled(false);
+  const bubble = addBubble('assistant');
+  bubble.classList.add('cursor');
+  let accumulated = '';
+
+  await streamChat({
+    messages:  history,
+    model:     modelSelect.value,
+    system:    systemPrompt.value.trim(),
+    config_id: parseInt(configSelect.value),
+    onToken(chunk) {
+      accumulated += chunk;
+      bubble.textContent = accumulated;
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    },
+    onDone() {
+      bubble.classList.remove('cursor');
+      history.push({ role:'assistant', content: accumulated });
+      setInputEnabled(true);
+      userInput.focus();
+      // 保存结果到文件
+      const path = savePath.value.trim();
+      if (path && accumulated) {
+        fetch('http://localhost:8000/save-result', {
+          method: 'POST',
+          headers: { ...authHeaders() },
+          body: JSON.stringify({ path, content: accumulated }),
+        }).catch(() => {});
+      }
+    },
+    onError(err) {
+      bubble.remove(); history.pop();
+      addError(err); setInputEnabled(true);
+    },
+  });
+}
+
+sendBtn.addEventListener('click', send);
+userInput.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+clearBtn.addEventListener('click', () => {
+  history = []; attachments = []; renderAttachments();
+  messagesEl.innerHTML = '<p class="empty-hint">发送消息开始对话</p>';
+});
+attachBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => { processFiles([...fileInput.files]); fileInput.value=''; });
+messagesEl.addEventListener('dragover', e => { e.preventDefault(); messagesEl.classList.add('drag-over'); });
+messagesEl.addEventListener('dragleave', () => messagesEl.classList.remove('drag-over'));
+messagesEl.addEventListener('drop', e => { e.preventDefault(); messagesEl.classList.remove('drag-over'); processFiles([...e.dataTransfer.files]); });
+</script>
 </body>
 </html>
