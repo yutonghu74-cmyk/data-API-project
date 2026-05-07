@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>密钥管理 — 数据平台</title>
+  <link rel="stylesheet" href="../assets/css/platform.css">
+</head>
+<body>
+<!-- 面包屑 -->
+<div class="breadcrumb">
+  <span class="brand">数据平台</span>
+  <span class="sep">›</span>
+  <a href="#">三方API管理</a>
+  <span class="sep">›</span>
+  <span class="current">密钥管理</span>
+  <div class="breadcrumb-right" id="userBar"></div>
+</div>
+
+<div class="layout">
+  <!-- 侧边栏 -->
+  <div class="sidebar">
+    <div class="sidebar-group open" id="sg1">
+      <div class="sidebar-group-title" onclick="document.getElementById('sg1').classList.toggle('open')">
+        三方API管理 <span class="arrow">›</span>
+      </div>
+      <div class="sidebar-children">
+        <a href="claude.html" class="sidebar-item">API调用</a>
+        <a href="apply.html"  class="sidebar-item">API申请&审核</a>
+        <a href="keys.html"   class="sidebar-item active">密钥管理</a>
+        <a href="stats.html"  class="sidebar-item">使用统计</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主内容 -->
+  <div class="main">
+    <p class="page-title">密钥管理</p>
+
+    <div class="card">
+      <p style="color:var(--text-muted);font-size:.9rem;line-height:1.8">
+        密钥由管理员统一管理。如需新增或修改 API 密钥，请联系管理员在
+        <a href="admin.html" style="color:var(--green)">管理员面板</a> 中操作。
+      </p>
+
+      <div style="margin-top:24px">
+        <p style="font-size:.85rem;font-weight:600;margin-bottom:12px;color:var(--text)">我的已授权 API</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>名称</th><th>供应商</th><th>Base URL</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+            </thead>
+            <tbody id="keysTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js';
+if (!requireLogin()) throw new Error('redirect');
+
+const user = getUser();
+document.getElementById('userBar').innerHTML = `
+  <span class="username">${user.username}</span>
+  <button class="logout" id="logoutBtn">退出</button>`;
+document.getElementById('logoutBtn').addEventListener('click', () => logout());
+
+async function loadKeys() {
+  const tbody = document.getElementById('keysTbody');
+  try {
+    const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
+    const list = await res.json();
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px">暂无已授权的密钥，请先<a href="apply.html" style="color:var(--green);margin:0 4px">提交申请</a>并等待审核通过</td></tr>';
+      return;
+    }
+    tbody.innerHTML = list.map(c => `
+      <tr>
+        <td><strong>${c.name}</strong></td>
+        <td>${c.provider}</td>
+        <td style="color:var(--text-muted);font-size:.82rem">${c.base_url}</td>
+        <td><span class="badge badge-green">已启用</span></td>
+        <td>${c.created_at ? c.created_at.slice(0,10) : '—'}</td>
+        <td><a href="stats.html" class="btn-link">查看统计</a></td>
+      </tr>`).join('');
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#dc2626;padding:32px">加载失败，请确认服务器已启动</td></tr>';
+  }
+}
+
+loadKeys();
+</script>
+</body>
+</html>
