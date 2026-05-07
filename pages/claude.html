@@ -6,6 +6,20 @@
   <title>API调用 — 数据平台</title>
   <link rel="stylesheet" href="../assets/css/platform.css">
   <style>
+    .sub-tabs {
+      display: flex; border-bottom: 1px solid var(--border);
+      margin-bottom: 0; background: #fff;
+    }
+    .sub-tab {
+      padding: 10px 22px; font-size: .9rem; cursor: pointer;
+      border: none; background: none; color: var(--text-muted);
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+      transition: color .15s;
+    }
+    .sub-tab:hover { color: var(--text); }
+    .sub-tab.active { color: var(--green); border-bottom-color: var(--green); font-weight: 500; }
+    .sub-panel { display: none; }
+    .sub-panel.active { display: block; }
     .chat-wrap { display: flex; flex-direction: column; height: calc(100vh - var(--header-h) - 56px); }
     .config-bar { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px; }
     .messages {
@@ -84,8 +98,6 @@
         <a href="apply.html"   class="sidebar-item">API申请&审核</a>
         <a href="keys.html"    class="sidebar-item">密钥管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
-        <a href="batch.html"   class="sidebar-item">批量处理</a>
-        <a href="history.html" class="sidebar-item">历史记录</a>
         <a href="users.html"   class="sidebar-item" id="usersLink" style="display:none">用户管理</a>
       </div>
     </div>
@@ -93,48 +105,65 @@
 
   <!-- 主内容 -->
   <div class="main" style="padding-bottom:0">
-    <div class="chat-wrap">
 
-      <!-- 配置栏 -->
-      <div class="config-bar">
-        <div class="form-group" style="margin:0">
-          <label>API 配置</label>
-          <select id="configSelect"><option value="">— 暂无可用 API —</option></select>
-        </div>
-        <div class="form-group" style="margin:0">
-          <label>模型</label>
-          <select id="modelSelect"></select>
-        </div>
-        <div class="form-group" style="margin:0">
-          <label>System Prompt</label>
-          <input id="systemPrompt" placeholder="可选：设置助手角色…">
-        </div>
-      </div>
-
-      <!-- 对话区 -->
-      <div class="messages" id="messages">
-        <p class="empty-hint">发送消息开始对话</p>
-      </div>
-
-      <!-- 输入区 -->
-      <div class="input-area">
-        <div class="attachments-row" id="attachmentsRow"></div>
-        <div class="input-row">
-          <textarea id="userInput" placeholder="输入消息… (Enter 发送，Shift+Enter 换行)"></textarea>
-          <input type="file" id="fileInput" multiple
-                 accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/csv,text/markdown,.md"
-                 style="display:none">
-          <button class="btn btn-secondary" id="attachBtn" title="附加文件">📎</button>
-          <button class="btn btn-primary"   id="sendBtn">发送</button>
-          <button class="btn btn-secondary" id="clearBtn">清空</button>
-        </div>
-        <div class="save-row">
-          <span>保存结果到：</span>
-          <input id="savePath" placeholder="留空则不保存，如 /Users/me/result.txt">
-        </div>
-      </div>
-
+    <!-- 子界面 Tab -->
+    <div class="sub-tabs">
+      <button class="sub-tab active" data-panel="chat">API调用</button>
+      <button class="sub-tab" data-panel="batch">批量处理</button>
+      <button class="sub-tab" data-panel="history">历史记录</button>
     </div>
+
+    <!-- ① API调用 -->
+    <div class="sub-panel active" id="panel-chat">
+      <div class="chat-wrap">
+        <div class="config-bar">
+          <div class="form-group" style="margin:0">
+            <label>API 配置</label>
+            <select id="configSelect"><option value="">— 暂无可用 API —</option></select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>模型</label>
+            <select id="modelSelect"></select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>System Prompt</label>
+            <input id="systemPrompt" placeholder="可选：设置助手角色…">
+          </div>
+        </div>
+        <div class="messages" id="messages">
+          <p class="empty-hint">发送消息开始对话</p>
+        </div>
+        <div class="input-area">
+          <div class="attachments-row" id="attachmentsRow"></div>
+          <div class="input-row">
+            <textarea id="userInput" placeholder="输入消息… (Enter 发送，Shift+Enter 换行)"></textarea>
+            <input type="file" id="fileInput" multiple
+                   accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/csv,text/markdown,.md"
+                   style="display:none">
+            <button class="btn btn-secondary" id="attachBtn" title="附加文件">📎</button>
+            <button class="btn btn-primary"   id="sendBtn">发送</button>
+            <button class="btn btn-secondary" id="clearBtn">清空</button>
+          </div>
+          <div class="save-row">
+            <span>保存结果到：</span>
+            <input id="savePath" placeholder="留空则不保存，如 /Users/me/result.txt">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ② 批量处理 -->
+    <div class="sub-panel" id="panel-batch">
+      <iframe src="batch.html" id="batchFrame"
+              style="width:100%;height:calc(100vh - 96px);border:none;display:block"></iframe>
+    </div>
+
+    <!-- ③ 历史记录 -->
+    <div class="sub-panel" id="panel-history">
+      <iframe src="history.html" id="historyFrame"
+              style="width:100%;height:calc(100vh - 96px);border:none;display:block"></iframe>
+    </div>
+
   </div>
 </div>
 
@@ -150,6 +179,16 @@ document.getElementById('userBar').innerHTML = `
   <button class="logout" id="logoutBtn">退出</button>`;
 document.getElementById('logoutBtn').addEventListener('click', () => logout());
 if (user.role === 'admin') { const l = document.getElementById('usersLink'); if (l) l.style.display = 'block'; }
+
+// ── 子界面 Tab 切换 ────────────────────────────────────────
+document.querySelectorAll('.sub-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.sub-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+  });
+});
 
 const messagesEl    = document.getElementById('messages');
 const userInput     = document.getElementById('userInput');
