@@ -45,7 +45,7 @@
 </head>
 <body>
 <div class="breadcrumb">
-  <span class="brand">数据平台</span>
+  <button class="sidebar-toggle" id="sidebarToggle">☰</button><span class="brand">数据平台</span>
   <span class="sep">›</span>
   <a href="#">三方API管理</a>
   <span class="sep">›</span>
@@ -98,8 +98,10 @@
 </div>
 
 <script type="module">
+import { initSidebar } from '../assets/js/sidebar.js';
 import { requireLogin, getUser, refreshUser, authHeaders, logout } from '../assets/js/auth.js';
 if (!requireLogin()) throw new Error('redirect');
+initSidebar();
 
 const user    = await refreshUser();
 const isAdmin = user.role === 'admin';

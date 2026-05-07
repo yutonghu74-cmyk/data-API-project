@@ -269,4 +269,89 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); }
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ── 汉堡菜单按钮（小屏） ────────────────────── */
+.sidebar-toggle {
+  display: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 1.2rem;
+  color: var(--text);
+  line-height: 1;
+}
+
+/* ── 响应式断点 ──────────────────────────────── */
+
+/* 平板（≤1024px）：侧边栏变窄 */
+@media (max-width: 1024px) {
+  :root { --sidebar-w: 160px; }
+  .sidebar-item { font-size: .8rem; padding: 7px 10px 7px 20px; }
+  .main { padding: 20px 16px; }
+}
+
+/* 手机（≤768px）：侧边栏折叠为可开关抽屉 */
+@media (max-width: 768px) {
+  :root { --sidebar-w: 0px; }
+
+  .sidebar-toggle { display: inline-flex; }
+
+  .breadcrumb { padding: 0 12px; gap: 4px; font-size: .8rem; }
+  .breadcrumb .brand { font-size: .85rem; }
+
+  .sidebar {
+    width: 220px;
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+    z-index: 150;
+    box-shadow: 2px 0 12px rgba(0,0,0,.1);
+  }
+  .sidebar.open { transform: translateX(0); }
+
+  /* 侧边栏打开时的遮罩 */
+  .sidebar-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.3);
+    z-index: 140;
+  }
+  .sidebar-overlay.open { display: block; }
+
+  .layout { padding-top: var(--header-h); }
+  .main { margin-left: 0 !important; padding: 16px 12px; }
+
+  /* 表格横向滚动 */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { min-width: 600px; }
+
+  /* 卡片全宽 */
+  .card { padding: 14px 12px; }
+
+  /* 弹窗全屏适配 */
+  .modal { padding: 20px 16px; width: 95vw; }
+
+  /* 网格列堆叠 */
+  .stat-cards,
+  [style*="grid-template-columns"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* 面包屑右侧收紧 */
+  .breadcrumb-right { gap: 8px; font-size: .8rem; }
+  .breadcrumb-right .username { max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* 按钮文字缩短 */
+  .toolbar .btn { padding: 6px 12px; font-size: .8rem; }
+}
+
+/* 超小屏（≤480px） */
+@media (max-width: 480px) {
+  .breadcrumb .sep,
+  .breadcrumb .current { display: none; }
+  table { min-width: 480px; }
+  .modal { padding: 16px 12px; }
 }
