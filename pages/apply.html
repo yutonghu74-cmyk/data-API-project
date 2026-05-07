@@ -232,7 +232,7 @@ document.getElementById('applyBtn').addEventListener('click', async () => {
   const list = await res.json().catch(() => []);
   document.getElementById('fConfig').innerHTML =
     '<option value="">— 请选择 API —</option>' +
-    list.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    list.map(c => `<option value="${c.id}">${c.name}（${c.provider}）</option>`).join('');
   ['fProject','fPurpose','fLead','fBudget','fSub'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('modalErr').textContent = '';
   document.getElementById('modalBg').classList.add('open');

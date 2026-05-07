@@ -210,13 +210,13 @@ def config_models(config_id: int):
 
 @app.get("/active-configs")
 def active_configs():
-    """返回所有激活的 anthropic 配置列表（仅 id 和 name，不暴露密钥）。"""
+    """返回所有激活的配置列表（仅 id、name、provider，不暴露密钥）。"""
     try:
         with get_db() as conn:
             rows = conn.execute(
-                "SELECT id, name FROM api_configs WHERE provider='anthropic' AND is_active=1 ORDER BY id DESC"
+                "SELECT id, name, provider FROM api_configs WHERE is_active=1 ORDER BY id DESC"
             ).fetchall()
-        return [{"id": r["id"], "name": r["name"]} for r in rows]
+        return [{"id": r["id"], "name": r["name"], "provider": r["provider"]} for r in rows]
     except Exception:
         return []
 
