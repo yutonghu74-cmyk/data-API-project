@@ -136,9 +136,19 @@
     <div class="form-group"><label>API Key</label><input id="fApiKey" type="password" placeholder="sk-ant-...（编辑时留空则不修改）"></div>
     <div class="form-group">
       <label>可用模型 <span style="color:var(--text-muted);font-weight:400">（多个用逗号分隔）</span></label>
-      <textarea id="fModels" rows="3" placeholder="claude-sonnet-4-6,claude-haiku-4-5-20251001,claude-opus-4-7"></textarea>
+      <textarea id="fModels" rows="2" placeholder="claude-sonnet-4-6,claude-haiku-4-5-20251001"></textarea>
     </div>
-    <p style="color:#dc2626;font-size:.83rem;min-height:18px" id="modalError"></p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-group" style="margin:0">
+        <label>Input 价格 <span style="color:var(--text-muted);font-weight:400">（元/千token）</span></label>
+        <input id="fPriceInput" type="number" placeholder="0" min="0" step="0.0001">
+      </div>
+      <div class="form-group" style="margin:0">
+        <label>Output 价格 <span style="color:var(--text-muted);font-weight:400">（元/千token）</span></label>
+        <input id="fPriceOutput" type="number" placeholder="0" min="0" step="0.0001">
+      </div>
+    </div>
+    <p style="color:#dc2626;font-size:.83rem;min-height:18px;margin-top:8px" id="modalError"></p>
     <div class="modal-actions">
       <button class="btn btn-secondary" id="cancelBtn">取消</button>
       <button class="btn btn-primary"   id="saveBtn">保存</button>
@@ -308,7 +318,7 @@ async function confirmSubDel(id) {
 document.getElementById('addConfigBtn').addEventListener('click', () => {
   editingId = null;
   document.getElementById('modalTitle').textContent = '新增配置';
-  ['fName','fProvider','fBaseUrl','fApiKey','fModels'].forEach(id => document.getElementById(id).value = '');
+  ['fName','fProvider','fBaseUrl','fApiKey','fModels','fPriceInput','fPriceOutput'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('modalError').textContent = '';
   document.getElementById('modalBg').classList.add('open');
 });
@@ -322,7 +332,9 @@ function openEdit(c) {
   document.getElementById('fProvider').value = c.provider;
   document.getElementById('fBaseUrl').value  = c.base_url;
   document.getElementById('fApiKey').value   = '';
-  document.getElementById('fModels').value   = c.models || '';
+  document.getElementById('fModels').value        = c.models || '';
+  document.getElementById('fPriceInput').value    = c.price_input || 0;
+  document.getElementById('fPriceOutput').value   = c.price_output || 0;
   document.getElementById('modalError').textContent = '';
   document.getElementById('modalBg').classList.add('open');
 }
@@ -336,7 +348,11 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
   const models   = document.getElementById('fModels').value.trim();
   if (!name || !provider || !base_url) { err.textContent = '名称、供应商、Base URL 不能为空'; return; }
   if (!editingId && !api_key) { err.textContent = 'API Key 不能为空'; return; }
-  const body = { name, provider, base_url, api_key: api_key || '(unchanged)', models, is_active: 1 };
+  const body = {
+    name, provider, base_url, api_key: api_key || '(unchanged)', models, is_active: 1,
+    price_input:  parseFloat(document.getElementById('fPriceInput').value)  || 0,
+    price_output: parseFloat(document.getElementById('fPriceOutput').value) || 0,
+  };
   try {
     if (editingId)
       await fetch(`http://localhost:8000/admin/configs/${editingId}`, { method:'PUT', headers:ADMIN_HEADERS, body:JSON.stringify(body) });

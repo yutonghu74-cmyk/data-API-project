@@ -75,25 +75,42 @@ def init_db():
                 is_active  INTEGER DEFAULT 1
             )
         """)
-        # 兼容旧库：若 models 列不存在则添加
-        try:
-            conn.execute("ALTER TABLE api_configs ADD COLUMN models TEXT DEFAULT ''")
-            conn.commit()
-        except Exception:
-            pass
+        # 兼容旧库：新增字段
+        for col, definition in [
+            ("models",          "TEXT DEFAULT ''"),
+            ("price_input",     "REAL DEFAULT 0"),   # 每千 input token 价格（元）
+            ("price_output",    "REAL DEFAULT 0"),   # 每千 output token 价格（元）
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE api_configs ADD COLUMN {col} {definition}")
+                conn.commit()
+            except Exception:
+                pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS usage_stats (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 config_id     INTEGER REFERENCES api_configs(id),
+                user_id       INTEGER REFERENCES users(id),
                 called_at     TEXT NOT NULL,
                 model         TEXT,
                 input_tokens  INTEGER DEFAULT 0,
                 output_tokens INTEGER DEFAULT 0,
+                cost          REAL DEFAULT 0,
                 success       INTEGER DEFAULT 1,
                 duration_ms   INTEGER DEFAULT 0,
                 error_msg     TEXT
             )
         """)
+        # 兼容旧 usage_stats
+        for col, definition in [
+            ("user_id", "INTEGER DEFAULT NULL"),
+            ("cost",    "REAL DEFAULT 0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE usage_stats ADD COLUMN {col} {definition}")
+                conn.commit()
+            except Exception:
+                pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -209,6 +226,7 @@ class ChatRequest(BaseModel):
     model: str = "claude-sonnet-4-6"
     system: str = ""
     config_id: int | None = None
+    user_token: str | None = None  # 用于记录调用用户
 
 @app.get("/health")
 def health():
@@ -294,9 +312,25 @@ async def chat(req: ChatRequest):
                 duration_ms = int((time.time() - start_time) * 1000)
                 try:
                     with get_db() as conn:
+                        # 获取该配置的定价
+                        cfg = conn.execute(
+                            "SELECT price_input, price_output FROM api_configs WHERE id=?", (req.config_id,)
+                        ).fetchone()
+                        pi = cfg["price_input"]  if cfg else 0
+                        po = cfg["price_output"] if cfg else 0
+                        cost = (input_tokens / 1000.0 * pi) + (output_tokens / 1000.0 * po)
+
+                        # 获取调用用户 ID
+                        uid = None
+                        if req.user_token:
+                            row = conn.execute(
+                                "SELECT user_id FROM user_tokens WHERE token=?", (req.user_token,)
+                            ).fetchone()
+                            if row: uid = row["user_id"]
+
                         conn.execute(
-                            "INSERT INTO usage_stats (config_id,called_at,model,input_tokens,output_tokens,success,duration_ms,error_msg) VALUES (?,?,?,?,?,?,?,?)",
-                            (req.config_id, called_at, req.model, input_tokens, output_tokens, success, duration_ms, error_msg)
+                            "INSERT INTO usage_stats (config_id,user_id,called_at,model,input_tokens,output_tokens,cost,success,duration_ms,error_msg) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (req.config_id, uid, called_at, req.model, input_tokens, output_tokens, cost, success, duration_ms, error_msg)
                         )
                         conn.commit()
                 except Exception:
@@ -312,6 +346,8 @@ class ConfigIn(BaseModel):
     api_key: str
     provider: str
     models: str = ""
+    price_input: float = 0   # 元/千 input token
+    price_output: float = 0  # 元/千 output token
     is_active: int = 1
 
 @app.post("/admin/login")
@@ -336,8 +372,8 @@ def create_config(body: ConfigIn, x_admin_password: str = Header(default="")):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO api_configs (name,base_url,api_key,provider,models,created_at,updated_at,is_active) VALUES (?,?,?,?,?,?,?,?)",
-            (body.name, body.base_url, body.api_key, body.provider, body.models, now, now, body.is_active)
+            "INSERT INTO api_configs (name,base_url,api_key,provider,models,price_input,price_output,created_at,updated_at,is_active) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (body.name, body.base_url, body.api_key, body.provider, body.models, body.price_input, body.price_output, now, now, body.is_active)
         )
         conn.commit()
         row = conn.execute("SELECT * FROM api_configs WHERE id=?", (cur.lastrowid,)).fetchone()
@@ -352,13 +388,13 @@ def update_config(config_id: int, body: ConfigIn, x_admin_password: str = Header
     with get_db() as conn:
         if body.api_key and body.api_key != "(unchanged)":
             conn.execute(
-                "UPDATE api_configs SET name=?,base_url=?,api_key=?,provider=?,models=?,updated_at=?,is_active=? WHERE id=?",
-                (body.name, body.base_url, body.api_key, body.provider, body.models, now, body.is_active, config_id)
+                "UPDATE api_configs SET name=?,base_url=?,api_key=?,provider=?,models=?,price_input=?,price_output=?,updated_at=?,is_active=? WHERE id=?",
+                (body.name, body.base_url, body.api_key, body.provider, body.models, body.price_input, body.price_output, now, body.is_active, config_id)
             )
         else:
             conn.execute(
-                "UPDATE api_configs SET name=?,base_url=?,provider=?,models=?,updated_at=?,is_active=? WHERE id=?",
-                (body.name, body.base_url, body.provider, body.models, now, body.is_active, config_id)
+                "UPDATE api_configs SET name=?,base_url=?,provider=?,models=?,price_input=?,price_output=?,updated_at=?,is_active=? WHERE id=?",
+                (body.name, body.base_url, body.provider, body.models, body.price_input, body.price_output, now, body.is_active, config_id)
             )
         conn.commit()
         row = conn.execute("SELECT * FROM api_configs WHERE id=?", (config_id,)).fetchone()
@@ -391,6 +427,9 @@ def list_stats(x_admin_password: str = Header(default="")):
                 SELECT COUNT(*) as total,
                        SUM(success) as ok,
                        SUM(input_tokens+output_tokens) as tokens,
+                       SUM(input_tokens) as in_tokens,
+                       SUM(output_tokens) as out_tokens,
+                       ROUND(SUM(cost),4) as total_cost,
                        AVG(duration_ms) as avg_ms,
                        MAX(called_at) as last_used
                 FROM usage_stats WHERE config_id=?
@@ -398,16 +437,41 @@ def list_stats(x_admin_password: str = Header(default="")):
             total = row["total"] or 0
             ok    = row["ok"] or 0
             result.append({
-                "config_id":   cid,
-                "name":        cfg["name"],
-                "provider":    cfg["provider"],
-                "total_calls": total,
-                "success_rate": round(ok / total * 100, 1) if total else 0,
-                "total_tokens": row["tokens"] or 0,
+                "config_id":       cid,
+                "name":            cfg["name"],
+                "provider":        cfg["provider"],
+                "total_calls":     total,
+                "success_rate":    round(ok / total * 100, 1) if total else 0,
+                "input_tokens":    row["in_tokens"] or 0,
+                "output_tokens":   row["out_tokens"] or 0,
+                "total_tokens":    row["tokens"] or 0,
+                "total_cost":      row["total_cost"] or 0,
                 "avg_duration_ms": round(row["avg_ms"] or 0, 1),
-                "last_used":   row["last_used"] or "—",
+                "last_used":       row["last_used"] or "—",
             })
     return result
+
+@app.get("/admin/stats/by-user")
+def stats_by_user(x_admin_password: str = Header(default="")):
+    """按用户分组的调用统计（token + 费用）。"""
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT
+                COALESCE(u.username, '匿名') as username,
+                COUNT(*) as total_calls,
+                SUM(s.input_tokens)  as input_tokens,
+                SUM(s.output_tokens) as output_tokens,
+                SUM(s.input_tokens + s.output_tokens) as total_tokens,
+                ROUND(SUM(s.cost), 4) as total_cost,
+                SUM(s.success) as success_count,
+                MAX(s.called_at) as last_used
+            FROM usage_stats s
+            LEFT JOIN users u ON u.id = s.user_id
+            GROUP BY s.user_id
+            ORDER BY total_cost DESC
+        """).fetchall()
+    return [dict(r) for r in rows]
 
 @app.get("/admin/stats/{config_id}/daily")
 def daily_stats(config_id: int, x_admin_password: str = Header(default="")):

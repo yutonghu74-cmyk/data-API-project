@@ -384,10 +384,11 @@ async function send() {
   let accumulated = '';
 
   await streamChat({
-    messages:  history,
-    model:     modelSelect.value,
-    system:    systemPrompt.value.trim(),
-    config_id: parseInt(configSelect.value),
+    messages:   history,
+    model:      modelSelect.value,
+    system:     systemPrompt.value.trim(),
+    config_id:  parseInt(configSelect.value),
+    user_token: (await import('../assets/js/auth.js')).getToken(),
     onToken(chunk) {
       accumulated += chunk;
       bubble.textContent = accumulated;

@@ -54,15 +54,30 @@
     <!-- 汇总卡片（管理员可见） -->
     <div class="stat-cards" id="summaryCards" style="display:none"></div>
 
-    <!-- 统计列表 -->
-    <div class="card" style="padding:0;overflow:hidden">
+    <!-- 按 API 统计 -->
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px">
       <div class="table-wrap">
         <table id="statsTable">
           <thead>
-            <tr><th>API名称</th><th>供应商</th><th>总调用</th><th>成功率</th><th>累计Token</th><th>平均耗时</th><th>最后使用</th><th>操作</th></tr>
+            <tr><th>API名称</th><th>供应商</th><th>总调用</th><th>成功率</th><th>Input Token</th><th>Output Token</th><th>总费用(元)</th><th>平均耗时</th><th>最后使用</th><th>操作</th></tr>
           </thead>
           <tbody id="statsTbody"></tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- 按用户分组（管理员可见） -->
+    <div id="userStatsSection" style="display:none">
+      <p style="font-size:.9rem;font-weight:600;margin-bottom:12px;color:var(--text)">按用户统计</p>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>用户</th><th>调用次数</th><th>Input Token</th><th>Output Token</th><th>总Token</th><th>总费用(元)</th><th>成功次数</th><th>最后使用</th></tr>
+            </thead>
+            <tbody id="userStatsTbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -96,16 +111,21 @@ async function loadStats() {
 
       // 汇总卡片
       if (statsList.length) {
-        const total  = statsList.reduce((s, r) => s + r.total_calls, 0);
-        const tokens = statsList.reduce((s, r) => s + r.total_tokens, 0);
-        const okRate = statsList.reduce((s, r) => s + r.success_rate, 0) / statsList.length;
-        const avgMs  = statsList.reduce((s, r) => s + r.avg_duration_ms, 0) / statsList.length;
+        const total   = statsList.reduce((s, r) => s + r.total_calls, 0);
+        const tokens  = statsList.reduce((s, r) => s + r.total_tokens, 0);
+        const cost    = statsList.reduce((s, r) => s + (r.total_cost || 0), 0);
+        const okRate  = statsList.reduce((s, r) => s + r.success_rate, 0) / statsList.length;
+        const avgMs   = statsList.reduce((s, r) => s + r.avg_duration_ms, 0) / statsList.length;
         document.getElementById('summaryCards').style.display = 'grid';
         document.getElementById('summaryCards').innerHTML = `
           <div class="stat-card"><div class="lbl">总调用次数</div><div class="val">${total.toLocaleString()}</div></div>
           <div class="stat-card"><div class="lbl">平均成功率</div><div class="val">${okRate.toFixed(1)}%</div></div>
           <div class="stat-card"><div class="lbl">累计 Token</div><div class="val">${tokens.toLocaleString()}</div></div>
+          <div class="stat-card"><div class="lbl">总费用</div><div class="val">¥${cost.toFixed(4)}</div></div>
           <div class="stat-card"><div class="lbl">平均耗时</div><div class="val">${avgMs.toFixed(0)} ms</div></div>`;
+
+        // 加载按用户分组数据
+        loadUserStats();
       }
     } else {
       // 普通用户：只看自己已授权的配置统计
@@ -141,10 +161,12 @@ async function loadStats() {
       <td>${s.provider}</td>
       <td>${typeof s.total_calls === 'number' ? s.total_calls.toLocaleString() : s.total_calls}</td>
       <td>${typeof s.success_rate === 'number' ? s.success_rate + '%' : s.success_rate}</td>
-      <td>${typeof s.total_tokens === 'number' ? s.total_tokens.toLocaleString() : s.total_tokens}</td>
+      <td>${typeof s.input_tokens  === 'number' ? s.input_tokens.toLocaleString()  : '—'}</td>
+      <td>${typeof s.output_tokens === 'number' ? s.output_tokens.toLocaleString() : '—'}</td>
+      <td>¥${typeof s.total_cost === 'number' ? s.total_cost.toFixed(4) : '—'}</td>
       <td>${typeof s.avg_duration_ms === 'number' ? s.avg_duration_ms + ' ms' : s.avg_duration_ms}</td>
       <td style="font-size:.82rem;color:var(--text-muted)">${s.last_used !== '—' ? s.last_used.slice(0,16).replace('T',' ') : '—'}</td>
-      <td><button class="expand-btn" data-cid="${s.config_id}">查看趋势 ▾</button></td>`;
+      <td><button class="expand-btn" data-cid="${s.config_id}">趋势 ▾</button></td>`;
     tbody.appendChild(tr);
 
     // 展开详情行
@@ -162,6 +184,32 @@ async function loadStats() {
   tbody.querySelectorAll('.expand-btn').forEach(btn => {
     btn.addEventListener('click', () => toggleDetail(btn.dataset.cid, btn));
   });
+}
+
+async function loadUserStats() {
+  if (!isAdmin) return;
+  document.getElementById('userStatsSection').style.display = 'block';
+  const tbody = document.getElementById('userStatsTbody');
+  try {
+    const res = await fetch('http://localhost:8000/admin/stats/by-user', { headers: ADMIN_HEADERS });
+    const list = await res.json().catch(() => []);
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px">暂无数据</td></tr>';
+      return;
+    }
+    tbody.innerHTML = list.map(u => `<tr>
+      <td><strong>${u.username}</strong></td>
+      <td>${u.total_calls.toLocaleString()}</td>
+      <td>${(u.input_tokens||0).toLocaleString()}</td>
+      <td>${(u.output_tokens||0).toLocaleString()}</td>
+      <td>${(u.total_tokens||0).toLocaleString()}</td>
+      <td>¥${(u.total_cost||0).toFixed(4)}</td>
+      <td>${u.success_count||0}</td>
+      <td style="font-size:.82rem;color:var(--text-muted)">${u.last_used ? u.last_used.slice(0,16).replace('T',' ') : '—'}</td>
+    </tr>`).join('');
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#dc2626;padding:24px">加载失败</td></tr>';
+  }
 }
 
 async function toggleDetail(configId, btn) {

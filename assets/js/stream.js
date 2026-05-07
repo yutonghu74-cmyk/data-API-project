@@ -1,12 +1,12 @@
 const BASE_URL = 'http://localhost:8000';
 
-export async function streamChat({ messages, model, system = '', config_id = null, onToken, onDone, onError }) {
+export async function streamChat({ messages, model, system = '', config_id = null, user_token = null, onToken, onDone, onError }) {
   let res;
   try {
     res = await fetch(`${BASE_URL}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, model, system, config_id }),
+      body: JSON.stringify({ messages, model, system, config_id, user_token }),
     });
   } catch {
     onError('无法连接到代理服务，请先启动 server.py（python server.py）');
