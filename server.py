@@ -113,6 +113,25 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sub_accounts (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                config_id         INTEGER REFERENCES api_configs(id),
+                name              TEXT NOT NULL,
+                description       TEXT DEFAULT '',
+                available_models  TEXT DEFAULT '',
+                quota_type        TEXT DEFAULT 'unlimited',
+                quota_amount      REAL DEFAULT 0,
+                ip_restriction    TEXT DEFAULT '',
+                is_active         INTEGER DEFAULT 1,
+                created_at        TEXT NOT NULL
+            )
+        """)
+        # api_requests 兼容添加 sub_account_id 字段
+        try:
+            conn.execute("ALTER TABLE api_requests ADD COLUMN sub_account_id INTEGER DEFAULT NULL")
+        except Exception:
+            pass
         conn.commit()
         # 初始化默认管理员账号（仅首次，已存在则跳过）
         now = datetime.now(timezone.utc).isoformat()
@@ -503,20 +522,6 @@ def my_requests(x_token: str = Header(default="")):
         """, (user["id"],)).fetchall()
     return [dict(r) for r in rows]
 
-@app.get("/api-requests/approved")
-def approved_configs(x_token: str = Header(default="")):
-    """返回当前用户已审核通过的 API 配置列表（用于聊天页下拉）。"""
-    user = get_current_user(x_token)
-    with get_db() as conn:
-        rows = conn.execute("""
-            SELECT c.id, c.name, c.provider, c.base_url, c.created_at, c.updated_at,
-                   r.id as request_id
-            FROM api_requests r
-            JOIN api_configs c ON c.id = r.config_id
-            WHERE r.user_id=? AND r.status='approved' AND c.is_active=1
-            ORDER BY c.name
-        """, (user["id"],)).fetchall()
-    return [dict(r) for r in rows]
 
 # ── Admin: 申请审核 ────────────────────────────────────────
 
@@ -537,17 +542,6 @@ def admin_list_requests(x_admin_password: str = Header(default="")):
         """).fetchall()
     return [dict(r) for r in rows]
 
-@app.put("/admin/api-requests/{req_id}")
-def admin_review_request(req_id: int, body: ReviewIn, x_admin_password: str = Header(default="")):
-    require_admin(x_admin_password)
-    now = datetime.now(timezone.utc).isoformat()
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE api_requests SET status=?, review_note=?, updated_at=? WHERE id=?",
-            (body.status, body.review_note, now, req_id)
-        )
-        conn.commit()
-    return {"ok": True}
 
 # ── Admin: 用户管理 ───────────────────────────────────────
 
@@ -695,6 +689,96 @@ def admin_history(user_id: int | None = None, x_admin_password: str = Header(def
                 LEFT JOIN api_configs c ON c.id = s.config_id
                 ORDER BY s.created_at DESC LIMIT 200
             """).fetchall()
+    return [dict(r) for r in rows]
+
+# ── 子账号管理 ─────────────────────────────────────────────
+
+class SubAccountIn(BaseModel):
+    name: str
+    description: str = ""
+    available_models: str = ""
+    quota_type: str = "unlimited"
+    quota_amount: float = 0
+    ip_restriction: str = ""
+    is_active: int = 1
+
+@app.get("/admin/configs/{config_id}/sub-accounts")
+def list_sub_accounts(config_id: int, x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM sub_accounts WHERE config_id=? ORDER BY id DESC", (config_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+@app.post("/admin/configs/{config_id}/sub-accounts")
+def create_sub_account(config_id: int, body: SubAccountIn, x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO sub_accounts (config_id,name,description,available_models,quota_type,quota_amount,ip_restriction,is_active,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (config_id, body.name, body.description, body.available_models, body.quota_type, body.quota_amount, body.ip_restriction, body.is_active, now)
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM sub_accounts WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+@app.put("/admin/sub-accounts/{sub_id}")
+def update_sub_account(sub_id: int, body: SubAccountIn, x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE sub_accounts SET name=?,description=?,available_models=?,quota_type=?,quota_amount=?,ip_restriction=?,is_active=? WHERE id=?",
+            (body.name, body.description, body.available_models, body.quota_type, body.quota_amount, body.ip_restriction, body.is_active, sub_id)
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM sub_accounts WHERE id=?", (sub_id,)).fetchone()
+    return dict(row)
+
+@app.delete("/admin/sub-accounts/{sub_id}")
+def delete_sub_account(sub_id: int, x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        conn.execute("DELETE FROM sub_accounts WHERE id=?", (sub_id,))
+        conn.commit()
+    return {"ok": True}
+
+@app.put("/admin/api-requests/{req_id}")
+def admin_review_request(req_id: int, body: ReviewIn, sub_account_id: int | None = None, x_admin_password: str = Header(default="")):
+    """审核申请，可同时分配子账号。"""
+    require_admin(x_admin_password)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        if sub_account_id is not None:
+            conn.execute(
+                "UPDATE api_requests SET status=?,review_note=?,sub_account_id=?,updated_at=? WHERE id=?",
+                (body.status, body.review_note, sub_account_id, now, req_id)
+            )
+        else:
+            conn.execute(
+                "UPDATE api_requests SET status=?,review_note=?,updated_at=? WHERE id=?",
+                (body.status, body.review_note, now, req_id)
+            )
+        conn.commit()
+    return {"ok": True}
+
+@app.get("/api-requests/approved")
+def approved_configs(x_token: str = Header(default="")):
+    """返回当前用户已审核通过的 API 配置列表，含子账号信息。"""
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT c.id, c.name, c.provider, c.base_url, c.created_at, c.updated_at,
+                   r.id as request_id, r.sub_account_id,
+                   sa.name as sub_account_name, sa.available_models as sub_models,
+                   sa.quota_type, sa.quota_amount, sa.ip_restriction
+            FROM api_requests r
+            JOIN api_configs c ON c.id = r.config_id
+            LEFT JOIN sub_accounts sa ON sa.id = r.sub_account_id
+            WHERE r.user_id=? AND r.status='approved' AND c.is_active=1
+            ORDER BY c.name
+        """, (user["id"],)).fetchall()
     return [dict(r) for r in rows]
 
 # ── ClickHouse ────────────────────────────────────────────

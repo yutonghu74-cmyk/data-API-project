@@ -112,6 +112,10 @@
 <div class="modal-bg" id="reviewBg">
   <div class="modal">
     <h3>审核申请</h3>
+    <div class="form-group">
+      <label>分配子账号 <span style="color:var(--text-muted);font-weight:400">（通过时可选）</span></label>
+      <select id="reviewSubAccount"><option value="">— 不分配子账号 —</option></select>
+    </div>
     <div class="form-group"><label>审核意见（可选）</label><textarea id="reviewNote" rows="3" placeholder="填写通过或拒绝的理由…"></textarea></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" id="reviewCancel">取消</button>
@@ -199,18 +203,32 @@ async function loadReview() {
       <td><span class="badge ${cls}">${label}</span></td>
       <td>${r.created_at.slice(0,10)}</td>
       <td>${r.status === 'pending'
-        ? `<button class="btn btn-primary" style="padding:4px 10px;font-size:.8rem" data-id="${r.id}">审核</button>`
+        ? `<button class="btn btn-primary" style="padding:4px 10px;font-size:.8rem" data-id="${r.id}" data-config-id="${r.config_id}">审核</button>`
         : `<span style="color:var(--text-muted);font-size:.82rem">${r.review_note || '—'}</span>`
       }</td>`;
     tbody.appendChild(tr);
   });
   tbody.querySelectorAll('[data-id]').forEach(b =>
-    b.addEventListener('click', () => {
+    b.addEventListener('click', async () => {
       reviewingId = b.dataset.id;
+      reviewingConfigId = b.dataset.configId;
       document.getElementById('reviewNote').value = '';
+      document.getElementById('reviewSubAccount').innerHTML = '<option value="">— 不分配子账号 —</option>';
+      // 加载该配置的子账号列表
+      if (reviewingConfigId) {
+        const res = await fetch(`http://localhost:8000/admin/configs/${reviewingConfigId}/sub-accounts`, { headers: ADMIN_HEADERS });
+        const subs = await res.json().catch(() => []);
+        subs.filter(s => s.is_active).forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.id; opt.textContent = `${s.name}（${s.quota_type==='unlimited'?'无限额度':`¥${s.quota_amount}`}）`;
+          document.getElementById('reviewSubAccount').appendChild(opt);
+        });
+      }
       document.getElementById('reviewBg').classList.add('open');
     }));
 }
+
+let reviewingConfigId = null;
 
 document.getElementById('reviewCancel').addEventListener('click',  () => document.getElementById('reviewBg').classList.remove('open'));
 document.getElementById('reviewApprove').addEventListener('click', () => doReview('approved'));
@@ -218,7 +236,11 @@ document.getElementById('reviewReject').addEventListener('click',  () => doRevie
 
 async function doReview(status) {
   const note = document.getElementById('reviewNote').value.trim();
-  await fetch(`http://localhost:8000/admin/api-requests/${reviewingId}`, {
+  const subAccountId = document.getElementById('reviewSubAccount').value;
+  const url = subAccountId
+    ? `http://localhost:8000/admin/api-requests/${reviewingId}?sub_account_id=${subAccountId}`
+    : `http://localhost:8000/admin/api-requests/${reviewingId}`;
+  await fetch(url, {
     method: 'PUT', headers: ADMIN_HEADERS,
     body: JSON.stringify({ status, review_note: note }),
   });

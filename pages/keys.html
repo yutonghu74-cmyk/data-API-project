@@ -52,6 +52,24 @@
       </div>
     </div>
 
+    <!-- 子账号管理面板（管理员点击展开） -->
+    <div id="subAccountPanel" style="display:none;margin-top:20px">
+      <div class="toolbar">
+        <span style="font-size:1rem;font-weight:600" id="subPanelTitle">子账号管理</span>
+        <button class="btn btn-primary" id="addSubBtn">+ 新增子账号</button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>名称</th><th>描述</th><th>可用模型</th><th>额度类型</th><th>额度</th><th>IP限制</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+            </thead>
+            <tbody id="subTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- 普通用户：显示已授权列表 -->
     <div id="userSection" style="display:none">
       <p class="page-title">密钥管理</p>
@@ -63,12 +81,47 @@
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>名称</th><th>供应商</th><th>可用模型</th><th>Base URL</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+              <tr><th>名称</th><th>供应商</th><th>子账号</th><th>可用模型</th><th>额度</th><th>IP限制</th><th>状态</th><th>创建时间</th></tr>
             </thead>
             <tbody id="userTbody"></tbody>
           </table>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- 子账号新增/编辑弹窗 -->
+<div class="modal-bg" id="subModalBg">
+  <div class="modal">
+    <h3 id="subModalTitle">新增子账号</h3>
+    <div class="form-group"><label>名称</label><input id="sfName" placeholder="如 项目A账号"></div>
+    <div class="form-group"><label>描述</label><input id="sfDesc" placeholder="可选说明"></div>
+    <div class="form-group">
+      <label>可用模型 <span style="color:var(--text-muted);font-weight:400">（逗号分隔，留空则继承父配置）</span></label>
+      <input id="sfModels" placeholder="claude-sonnet-4-6,claude-haiku-4-5-20251001">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-group" style="margin:0">
+        <label>额度类型</label>
+        <select id="sfQuotaType">
+          <option value="unlimited">无限额度</option>
+          <option value="amount">金额限制</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin:0" id="sfQuotaAmountGroup">
+        <label>额度金额（元）</label>
+        <input id="sfQuotaAmount" type="number" placeholder="0" min="0" step="0.01">
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:12px">
+      <label>IP 限制 <span style="color:var(--text-muted);font-weight:400">（可选，逗号分隔，留空不限制）</span></label>
+      <input id="sfIp" placeholder="192.168.1.1,10.0.0.0/24">
+    </div>
+    <p style="color:#dc2626;font-size:.83rem;min-height:18px" id="subModalError"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="subCancelBtn">取消</button>
+      <button class="btn btn-primary"   id="subSaveBtn">保存</button>
     </div>
   </div>
 </div>
@@ -140,12 +193,114 @@ async function loadAdminConfigs() {
       <td>${c.created_at.slice(0,10)}</td>
       <td style="white-space:nowrap">
         <button class="btn btn-secondary" style="padding:4px 10px;font-size:.8rem" data-edit="${c.id}">编辑</button>
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:.8rem;color:var(--green)" data-sub="${c.id}" data-name="${c.name}">子账号</button>
         <button class="btn btn-danger"    style="padding:4px 10px;font-size:.8rem" data-del="${c.id}">删除</button>
       </td>`;
     tbody.appendChild(tr);
   });
   tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openEdit(allConfigs.find(x => x.id == b.dataset.edit))));
   tbody.querySelectorAll('[data-del]').forEach(b  => b.addEventListener('click', () => confirmDel(b.dataset.del)));
+  tbody.querySelectorAll('[data-sub]').forEach(b  => b.addEventListener('click', () => openSubPanel(b.dataset.sub, b.dataset.name)));
+}
+
+// ── 子账号管理 ─────────────────────────────────────────────
+let currentConfigId = null;
+let editingSubId = null;
+
+async function openSubPanel(configId, configName) {
+  currentConfigId = configId;
+  document.getElementById('subPanelTitle').textContent = `子账号管理 — ${configName}`;
+  document.getElementById('subAccountPanel').style.display = 'block';
+  document.getElementById('subAccountPanel').scrollIntoView({ behavior: 'smooth' });
+  loadSubAccounts();
+}
+
+async function loadSubAccounts() {
+  const res = await fetch(`http://localhost:8000/admin/configs/${currentConfigId}/sub-accounts`, { headers: ADMIN_HEADERS });
+  const list = await res.json().catch(() => []);
+  const tbody = document.getElementById('subTbody');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">暂无子账号</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  list.forEach(s => {
+    const quota = s.quota_type === 'unlimited' ? '无限' : `¥${s.quota_amount}`;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${s.name}</strong></td>
+      <td style="color:var(--text-muted)">${s.description||'—'}</td>
+      <td style="font-size:.82rem">${s.available_models||'继承父配置'}</td>
+      <td><span class="badge ${s.quota_type==='unlimited'?'badge-green':'badge-yellow'}">${s.quota_type==='unlimited'?'无限':'金额'}</span></td>
+      <td>${quota}</td>
+      <td style="font-size:.82rem;color:var(--text-muted)">${s.ip_restriction||'不限制'}</td>
+      <td><span class="badge ${s.is_active?'badge-green':'badge-gray'}">${s.is_active?'启用':'禁用'}</span></td>
+      <td>${s.created_at.slice(0,10)}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:.8rem" data-sub-edit="${s.id}">编辑</button>
+        <button class="btn btn-danger"    style="padding:4px 10px;font-size:.8rem" data-sub-del="${s.id}">删除</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll('[data-sub-edit]').forEach(b => b.addEventListener('click', () => openSubEdit(list.find(x=>x.id==b.dataset.subEdit))));
+  tbody.querySelectorAll('[data-sub-del]').forEach(b  => b.addEventListener('click', () => confirmSubDel(b.dataset.subDel)));
+}
+
+document.getElementById('addSubBtn').addEventListener('click', () => {
+  editingSubId = null;
+  document.getElementById('subModalTitle').textContent = '新增子账号';
+  ['sfName','sfDesc','sfModels','sfIp'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('sfQuotaType').value = 'unlimited';
+  document.getElementById('sfQuotaAmount').value = '0';
+  document.getElementById('subModalError').textContent = '';
+  document.getElementById('subModalBg').classList.add('open');
+});
+
+document.getElementById('sfQuotaType').addEventListener('change', e => {
+  document.getElementById('sfQuotaAmountGroup').style.opacity = e.target.value === 'unlimited' ? '0.4' : '1';
+});
+
+document.getElementById('subCancelBtn').addEventListener('click', () => document.getElementById('subModalBg').classList.remove('open'));
+
+function openSubEdit(s) {
+  editingSubId = s.id;
+  document.getElementById('subModalTitle').textContent = '编辑子账号';
+  document.getElementById('sfName').value = s.name;
+  document.getElementById('sfDesc').value = s.description||'';
+  document.getElementById('sfModels').value = s.available_models||'';
+  document.getElementById('sfQuotaType').value = s.quota_type||'unlimited';
+  document.getElementById('sfQuotaAmount').value = s.quota_amount||0;
+  document.getElementById('sfIp').value = s.ip_restriction||'';
+  document.getElementById('subModalError').textContent = '';
+  document.getElementById('subModalBg').classList.add('open');
+}
+
+document.getElementById('subSaveBtn').addEventListener('click', async () => {
+  const err = document.getElementById('subModalError');
+  const name = document.getElementById('sfName').value.trim();
+  if (!name) { err.textContent = '名称不能为空'; return; }
+  const body = {
+    name, description: document.getElementById('sfDesc').value.trim(),
+    available_models: document.getElementById('sfModels').value.trim(),
+    quota_type: document.getElementById('sfQuotaType').value,
+    quota_amount: parseFloat(document.getElementById('sfQuotaAmount').value)||0,
+    ip_restriction: document.getElementById('sfIp').value.trim(),
+    is_active: 1,
+  };
+  try {
+    if (editingSubId)
+      await fetch(`http://localhost:8000/admin/sub-accounts/${editingSubId}`, { method:'PUT', headers:ADMIN_HEADERS, body:JSON.stringify(body) });
+    else
+      await fetch(`http://localhost:8000/admin/configs/${currentConfigId}/sub-accounts`, { method:'POST', headers:ADMIN_HEADERS, body:JSON.stringify(body) });
+    document.getElementById('subModalBg').classList.remove('open');
+    loadSubAccounts();
+  } catch(e) { err.textContent = '保存失败'; }
+});
+
+async function confirmSubDel(id) {
+  if (!confirm('确定删除此子账号？')) return;
+  await fetch(`http://localhost:8000/admin/sub-accounts/${id}`, { method:'DELETE', headers:ADMIN_HEADERS });
+  loadSubAccounts();
 }
 
 document.getElementById('addConfigBtn').addEventListener('click', () => {
@@ -202,26 +357,25 @@ async function loadUserKeys() {
   const list = await res.json().catch(() => []);
   const tbody = document.getElementById('userTbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px">暂无已授权的密钥，请先<a href="apply.html" style="color:var(--green);margin:0 4px">提交申请</a></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:32px">暂无已授权的密钥，请先<a href="apply.html" style="color:var(--green);margin:0 4px">提交申请</a></td></tr>';
     return;
   }
-  // 批量获取每个 config 的模型列表
-  const modelMap = {};
-  await Promise.all(list.map(async c => {
-    const r = await fetch(`http://localhost:8000/configs/${c.id}/models`);
-    const d = await r.json().catch(() => ({ models: [] }));
-    modelMap[c.id] = d.models;
-  }));
-  tbody.innerHTML = list.map(c => `
-    <tr>
+  tbody.innerHTML = list.map(c => {
+    const subName    = c.sub_account_name || '—';
+    const subModels  = c.sub_models ? c.sub_models.split(',').filter(Boolean).join('、') : (c.name ? '继承父配置' : '—');
+    const quota      = c.quota_type === 'unlimited' ? '无限' : (c.quota_type === 'amount' ? `¥${c.quota_amount}` : '—');
+    const ip         = c.ip_restriction || '不限制';
+    return `<tr>
       <td><strong>${c.name}</strong></td>
       <td>${c.provider}</td>
-      <td style="font-size:.82rem;color:var(--text-muted)">${(modelMap[c.id]||[]).join('、') || '—'}</td>
-      <td style="font-size:.82rem;color:var(--text-muted)">${c.base_url}</td>
+      <td><span class="badge ${c.sub_account_id ? 'badge-green' : 'badge-gray'}">${subName}</span></td>
+      <td style="font-size:.82rem;color:var(--text-muted)">${subModels}</td>
+      <td style="font-size:.82rem">${quota}</td>
+      <td style="font-size:.82rem;color:var(--text-muted)">${ip}</td>
       <td><span class="badge badge-green">已启用</span></td>
       <td>${c.created_at ? c.created_at.slice(0,10) : '—'}</td>
-      <td><a href="stats.html" class="btn-link">查看统计</a></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 </script>
 </body>
