@@ -97,7 +97,7 @@
 import { requireLogin, getUser, refreshUser, authHeaders, logout } from '../assets/js/auth.js';
 if (!requireLogin()) throw new Error('redirect');
 
-const user    = getUser();
+const user    = await refreshUser();
 const isAdmin = user.role === 'admin';
 const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
 

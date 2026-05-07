@@ -69,17 +69,16 @@
 </div>
 
 <script type="module">
-import { requireLogin, getUser, logout } from '../assets/js/auth.js';
+import { requireLogin, getUser, refreshUser, authHeaders, logout } from '../assets/js/auth.js';
 if (!requireLogin()) throw new Error('redirect');
 
-const me = getUser();
+const me = await refreshUser();
 if (me.role !== 'admin') { window.location.href = '/pages/claude.html'; throw new Error('no access'); }
 
 document.getElementById('userBar').innerHTML = `
   <span class="username">${me.username}（管理员）</span>
   <button class="logout" id="logoutBtn">退出</button>`;
 document.getElementById('logoutBtn').addEventListener('click', () => logout());
-document.getElementById('usersLink').style.display = 'block';
 
 const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
 let resetUserId = null;
