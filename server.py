@@ -19,7 +19,7 @@ from fastapi import Header
 from fastapi.responses import JSONResponse
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "admin.db")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")  # 建议在 .env 中设置强密码
 
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
@@ -62,7 +62,8 @@ def get_db():
         conn.close()
 
 def require_admin(x_admin_password: str = Header(default="")):
-    if x_admin_password != ADMIN_PASSWORD:
+    import hmac
+    if not hmac.compare_digest(x_admin_password, ADMIN_PASSWORD):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -198,7 +199,7 @@ def create_config(body: ConfigIn, x_admin_password: str = Header(default="")):
         conn.commit()
         row = conn.execute("SELECT * FROM api_configs WHERE id=?", (cur.lastrowid,)).fetchone()
     d = dict(row)
-    d["api_key"] = "****" + d["api_key"][-4:]
+    d["api_key"] = "****" + d["api_key"][-4:] if len(d["api_key"]) >= 4 else "****"
     return d
 
 @app.put("/admin/configs/{config_id}")
@@ -206,16 +207,22 @@ def update_config(config_id: int, body: ConfigIn, x_admin_password: str = Header
     require_admin(x_admin_password)
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
-        conn.execute(
-            "UPDATE api_configs SET name=?,base_url=?,api_key=?,provider=?,updated_at=?,is_active=? WHERE id=?",
-            (body.name, body.base_url, body.api_key, body.provider, now, body.is_active, config_id)
-        )
+        if body.api_key and body.api_key != "(unchanged)":
+            conn.execute(
+                "UPDATE api_configs SET name=?,base_url=?,api_key=?,provider=?,updated_at=?,is_active=? WHERE id=?",
+                (body.name, body.base_url, body.api_key, body.provider, now, body.is_active, config_id)
+            )
+        else:
+            conn.execute(
+                "UPDATE api_configs SET name=?,base_url=?,provider=?,updated_at=?,is_active=? WHERE id=?",
+                (body.name, body.base_url, body.provider, now, body.is_active, config_id)
+            )
         conn.commit()
         row = conn.execute("SELECT * FROM api_configs WHERE id=?", (config_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
     d = dict(row)
-    d["api_key"] = "****" + d["api_key"][-4:]
+    d["api_key"] = "****" + d["api_key"][-4:] if len(d["api_key"]) >= 4 else "****"
     return d
 
 @app.delete("/admin/configs/{config_id}")
