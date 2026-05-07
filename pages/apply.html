@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API申请&审核 — 数据平台</title>
+  <link rel="stylesheet" href="../assets/css/platform.css">
+</head>
+<body>
+<!-- 面包屑 -->
+<div class="breadcrumb">
+  <span class="brand">数据平台</span>
+  <span class="sep">›</span>
+  <a href="#">三方API管理</a>
+  <span class="sep">›</span>
+  <span class="current">API申请&审核</span>
+  <div class="breadcrumb-right" id="userBar"></div>
+</div>
+
+<div class="layout">
+  <!-- 侧边栏 -->
+  <div class="sidebar">
+    <div class="sidebar-group open" id="sg1">
+      <div class="sidebar-group-title" onclick="document.getElementById('sg1').classList.toggle('open')">
+        三方API管理 <span class="arrow">›</span>
+      </div>
+      <div class="sidebar-children">
+        <a href="claude.html"  class="sidebar-item">API调用</a>
+        <a href="apply.html"   class="sidebar-item active">API申请&审核</a>
+        <a href="keys.html"    class="sidebar-item">密钥管理</a>
+        <a href="stats.html"   class="sidebar-item">使用统计</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主内容 -->
+  <div class="main">
+    <div class="toolbar">
+      <span class="page-title" style="margin:0">API申请&审核</span>
+      <button class="btn btn-primary" id="applyBtn">+ 新增申请</button>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>API名称</th><th>供应商</th><th>需求项目</th><th>状态</th><th>申请时间</th><th>审核意见</th></tr>
+          </thead>
+          <tbody id="reqTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 申请弹窗 -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h3>新增 API 申请</h3>
+    <div class="form-group">
+      <label>选择 API</label>
+      <select id="fConfig"></select>
+    </div>
+    <div class="form-group">
+      <label>需求项目</label>
+      <input id="fProject" placeholder="请输入项目名称">
+    </div>
+    <div class="form-group">
+      <label>需求目的</label>
+      <textarea id="fPurpose" rows="2" placeholder="请描述使用目的"></textarea>
+    </div>
+    <div class="form-group">
+      <label>项目负责人</label>
+      <input id="fLead" placeholder="请输入负责人姓名">
+    </div>
+    <div class="form-group">
+      <label>需求预算</label>
+      <input id="fBudget" placeholder="如：10000元">
+    </div>
+    <div class="form-group">
+      <label>子账号 <span style="color:var(--text-muted);font-weight:400">（可选，多个用逗号分隔）</span></label>
+      <input id="fSub" placeholder="子账号1,子账号2">
+    </div>
+    <p style="color:#dc2626;font-size:.83rem;min-height:18px" id="modalErr"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="cancelBtn">取消</button>
+      <button class="btn btn-primary" id="submitBtn">提交申请</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js';
+if (!requireLogin()) throw new Error('redirect');
+
+const user = getUser();
+document.getElementById('userBar').innerHTML = `
+  <span class="username">${user.username}</span>
+  <button class="logout" id="logoutBtn">退出</button>`;
+document.getElementById('logoutBtn').addEventListener('click', () => { logout(); });
+
+const STATUS = { pending: ['审核中','badge-yellow'], approved: ['已通过','badge-green'], rejected: ['已拒绝','badge-red'] };
+
+async function loadRequests() {
+  const res = await fetch('http://localhost:8000/api-requests/my', { headers: authHeaders() });
+  const list = await res.json();
+  const tbody = document.getElementById('reqTbody');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px">暂无申请记录</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map(r => {
+    const [label, cls] = STATUS[r.status] || ['未知','badge-gray'];
+    return `<tr>
+      <td>${r.config_name}</td>
+      <td>${r.provider}</td>
+      <td>${r.project_name}</td>
+      <td><span class="badge ${cls}">${label}</span></td>
+      <td>${r.created_at.slice(0,10)}</td>
+      <td style="color:var(--text-muted)">${r.review_note || '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadConfigs() {
+  const res = await fetch('http://localhost:8000/active-configs');
+  const list = await res.json();
+  const sel = document.getElementById('fConfig');
+  sel.innerHTML = '<option value="">— 请选择 API —</option>' +
+    list.map(c => `<option value="${c.id}">${c.name}（${c.provider || ''}）</option>`).join('');
+}
+
+loadRequests();
+
+document.getElementById('applyBtn').addEventListener('click', () => {
+  loadConfigs();
+  document.getElementById('modalErr').textContent = '';
+  document.getElementById('fProject').value = '';
+  document.getElementById('fPurpose').value = '';
+  document.getElementById('fLead').value = '';
+  document.getElementById('fBudget').value = '';
+  document.getElementById('fSub').value = '';
+  document.getElementById('modalBg').classList.add('open');
+});
+
+document.getElementById('cancelBtn').addEventListener('click', () =>
+  document.getElementById('modalBg').classList.remove('open'));
+
+document.getElementById('modalBg').addEventListener('click', e => {
+  if (e.target === document.getElementById('modalBg'))
+    document.getElementById('modalBg').classList.remove('open');
+});
+
+document.getElementById('submitBtn').addEventListener('click', async () => {
+  const err = document.getElementById('modalErr');
+  err.textContent = '';
+  const config_id = parseInt(document.getElementById('fConfig').value);
+  const project_name = document.getElementById('fProject').value.trim();
+  const purpose = document.getElementById('fPurpose').value.trim();
+  const lead = document.getElementById('fLead').value.trim();
+  const budget = document.getElementById('fBudget').value.trim();
+  const sub_accounts = document.getElementById('fSub').value.trim();
+  if (!config_id) { err.textContent = '请选择 API'; return; }
+  if (!project_name) { err.textContent = '请输入需求项目'; return; }
+  if (!purpose) { err.textContent = '请输入需求目的'; return; }
+  if (!lead) { err.textContent = '请输入项目负责人'; return; }
+  if (!budget) { err.textContent = '请输入需求预算'; return; }
+  try {
+    const res = await fetch('http://localhost:8000/api-requests', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ config_id, project_name, purpose, lead, budget, sub_accounts }),
+    });
+    if (!res.ok) { const d = await res.json(); throw new Error(d.detail); }
+    document.getElementById('modalBg').classList.remove('open');
+    loadRequests();
+  } catch(e) { err.textContent = '提交失败：' + e.message; }
+});
+</script>
+</body>
+</html>
