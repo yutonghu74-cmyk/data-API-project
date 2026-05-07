@@ -94,7 +94,7 @@
 </div>
 
 <script type="module">
-import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js';
+import { requireLogin, getUser, refreshUser, authHeaders, logout } from '../assets/js/auth.js';
 if (!requireLogin()) throw new Error('redirect');
 
 const user    = getUser();

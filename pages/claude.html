@@ -168,14 +168,14 @@
 </div>
 
 <script type="module">
-import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js';
+import { requireLogin, getUser, refreshUser, authHeaders, logout } from '../assets/js/auth.js';
 import { streamChat, fetchModels } from '../assets/js/stream.js';
 
 if (!requireLogin()) throw new Error('redirect');
 
-const user = getUser();
+const user = await refreshUser();
 document.getElementById('userBar').innerHTML = `
-  <span class="username">${user.username}</span>
+  <span class="username">${user.username}${user.role === 'admin' ? '（管理员）' : ''}</span>
   <button class="logout" id="logoutBtn">退出</button>`;
 document.getElementById('logoutBtn').addEventListener('click', () => logout());
 if (user.role === 'admin') { const l = document.getElementById('usersLink'); if (l) l.style.display = 'block'; }

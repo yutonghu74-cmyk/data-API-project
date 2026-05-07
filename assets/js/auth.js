@@ -24,6 +24,21 @@ export function requireLogin() {
   return true;
 }
 
+// 从服务器刷新用户信息（确保 role 最新），返回最新 user 对象
+export async function refreshUser() {
+  try {
+    const res = await fetch(`${BASE}/auth/me`, {
+      headers: { 'X-Token': getToken() || '' },
+    });
+    if (!res.ok) return getUser();
+    const user = await res.json();
+    localStorage.setItem(USER_KEY, JSON.stringify(user));
+    return user;
+  } catch {
+    return getUser();
+  }
+}
+
 export function authHeaders() {
   return { 'Content-Type': 'application/json', 'X-Token': getToken() || '' };
 }
