@@ -125,7 +125,7 @@ body {
   margin-left: var(--sidebar-w);
   flex: 1;
   padding: 28px 32px;
-  max-width: 1200px;
+  min-width: 0;
 }
 .page-title {
   font-size: 1.1rem;
