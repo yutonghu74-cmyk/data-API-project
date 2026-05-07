@@ -11,6 +11,59 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Literal
+import sqlite3
+import time
+from datetime import datetime, timezone
+from contextlib import contextmanager
+from fastapi import Header
+from fastapi.responses import JSONResponse
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "admin.db")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_configs (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT NOT NULL,
+                base_url   TEXT NOT NULL,
+                api_key    TEXT NOT NULL,
+                provider   TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                is_active  INTEGER DEFAULT 1
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS usage_stats (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                config_id     INTEGER REFERENCES api_configs(id),
+                called_at     TEXT NOT NULL,
+                model         TEXT,
+                input_tokens  INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                success       INTEGER DEFAULT 1,
+                duration_ms   INTEGER DEFAULT 0,
+                error_msg     TEXT
+            )
+        """)
+        conn.commit()
+
+init_db()
+
+@contextmanager
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def require_admin(x_admin_password: str = Header(default="")):
+    if x_admin_password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
