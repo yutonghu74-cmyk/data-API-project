@@ -5,6 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>API申请&审核 — 数据平台</title>
   <link rel="stylesheet" href="../assets/css/platform.css">
+  <style>
+    .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+    .tab {
+      padding: 9px 20px; font-size: .9rem; cursor: pointer;
+      border: none; background: none; color: var(--text-muted);
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .tab.active { color: var(--green); border-bottom-color: var(--green); font-weight: 500; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+  </style>
 </head>
 <body>
 <!-- 面包屑 -->
@@ -40,43 +51,50 @@
       <button class="btn btn-primary" id="applyBtn">+ 新增申请</button>
     </div>
 
-    <div class="card" style="padding:0;overflow:hidden">
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>API名称</th><th>供应商</th><th>需求项目</th><th>状态</th><th>申请时间</th><th>审核意见</th></tr>
-          </thead>
-          <tbody id="reqTbody"></tbody>
-        </table>
+    <!-- Tab（管理员多一个「审核管理」） -->
+    <div class="tabs" id="tabBar">
+      <button class="tab active" data-tab="my">我的申请</button>
+    </div>
+
+    <!-- 我的申请 -->
+    <div class="tab-panel active" id="tab-my">
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>API名称</th><th>供应商</th><th>需求项目</th><th>状态</th><th>申请时间</th><th>审核意见</th></tr>
+            </thead>
+            <tbody id="myTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 审核管理（仅管理员） -->
+    <div class="tab-panel" id="tab-review">
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>用户</th><th>API</th><th>需求项目</th><th>需求目的</th><th>负责人</th><th>预算</th><th>状态</th><th>申请时间</th><th>操作</th></tr>
+            </thead>
+            <tbody id="reviewTbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- 申请弹窗 -->
+<!-- 新增申请弹窗 -->
 <div class="modal-bg" id="modalBg">
   <div class="modal">
     <h3>新增 API 申请</h3>
-    <div class="form-group">
-      <label>选择 API</label>
-      <select id="fConfig"></select>
-    </div>
-    <div class="form-group">
-      <label>需求项目</label>
-      <input id="fProject" placeholder="请输入项目名称">
-    </div>
-    <div class="form-group">
-      <label>需求目的</label>
-      <textarea id="fPurpose" rows="2" placeholder="请描述使用目的"></textarea>
-    </div>
-    <div class="form-group">
-      <label>项目负责人</label>
-      <input id="fLead" placeholder="请输入负责人姓名">
-    </div>
-    <div class="form-group">
-      <label>需求预算</label>
-      <input id="fBudget" placeholder="如：10000元">
-    </div>
+    <div class="form-group"><label>选择 API</label><select id="fConfig"></select></div>
+    <div class="form-group"><label>需求项目</label><input id="fProject" placeholder="请输入项目名称"></div>
+    <div class="form-group"><label>需求目的</label><textarea id="fPurpose" rows="2" placeholder="请描述使用目的"></textarea></div>
+    <div class="form-group"><label>项目负责人</label><input id="fLead" placeholder="请输入负责人姓名"></div>
+    <div class="form-group"><label>需求预算</label><input id="fBudget" placeholder="如：10000元"></div>
     <div class="form-group">
       <label>子账号 <span style="color:var(--text-muted);font-weight:400">（可选，多个用逗号分隔）</span></label>
       <input id="fSub" placeholder="子账号1,子账号2">
@@ -84,7 +102,20 @@
     <p style="color:#dc2626;font-size:.83rem;min-height:18px" id="modalErr"></p>
     <div class="modal-actions">
       <button class="btn btn-secondary" id="cancelBtn">取消</button>
-      <button class="btn btn-primary" id="submitBtn">提交申请</button>
+      <button class="btn btn-primary"   id="submitBtn">提交申请</button>
+    </div>
+  </div>
+</div>
+
+<!-- 审核弹窗 -->
+<div class="modal-bg" id="reviewBg">
+  <div class="modal">
+    <h3>审核申请</h3>
+    <div class="form-group"><label>审核意见（可选）</label><textarea id="reviewNote" rows="3" placeholder="填写通过或拒绝的理由…"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="reviewCancel">取消</button>
+      <button class="btn btn-danger"    id="reviewReject">拒绝</button>
+      <button class="btn btn-primary"   id="reviewApprove">通过</button>
     </div>
   </div>
 </div>
@@ -94,27 +125,47 @@ import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js
 if (!requireLogin()) throw new Error('redirect');
 
 const user = getUser();
+const isAdmin = user.role === 'admin';
+const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
+
 document.getElementById('userBar').innerHTML = `
-  <span class="username">${user.username}</span>
+  <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
   <button class="logout" id="logoutBtn">退出</button>`;
-document.getElementById('logoutBtn').addEventListener('click', () => { logout(); });
+document.getElementById('logoutBtn').addEventListener('click', () => logout());
 
-const STATUS = { pending: ['审核中','badge-yellow'], approved: ['已通过','badge-green'], rejected: ['已拒绝','badge-red'] };
+// 管理员额外插入「审核管理」tab
+if (isAdmin) {
+  const tab = document.createElement('button');
+  tab.className = 'tab'; tab.dataset.tab = 'review'; tab.textContent = '审核管理';
+  document.getElementById('tabBar').appendChild(tab);
+}
 
-async function loadRequests() {
+// Tab 切换
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('tab-' + t.dataset.tab).classList.add('active');
+    if (t.dataset.tab === 'review') loadReview();
+  });
+});
+
+// ── 我的申请 ──────────────────────────────────────────────
+const STATUS = { pending:['审核中','badge-yellow'], approved:['已通过','badge-green'], rejected:['已拒绝','badge-red'] };
+
+async function loadMyRequests() {
   const res = await fetch('http://localhost:8000/api-requests/my', { headers: authHeaders() });
-  const list = await res.json();
-  const tbody = document.getElementById('reqTbody');
+  const list = await res.json().catch(() => []);
+  const tbody = document.getElementById('myTbody');
   if (!list.length) {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px">暂无申请记录</td></tr>';
     return;
   }
   tbody.innerHTML = list.map(r => {
-    const [label, cls] = STATUS[r.status] || ['未知','badge-gray'];
+    const [label,cls] = STATUS[r.status] || ['未知','badge-gray'];
     return `<tr>
-      <td>${r.config_name}</td>
-      <td>${r.provider}</td>
-      <td>${r.project_name}</td>
+      <td>${r.config_name}</td><td>${r.provider}</td><td>${r.project_name}</td>
       <td><span class="badge ${cls}">${label}</span></td>
       <td>${r.created_at.slice(0,10)}</td>
       <td style="color:var(--text-muted)">${r.review_note || '—'}</td>
@@ -122,60 +173,100 @@ async function loadRequests() {
   }).join('');
 }
 
-async function loadConfigs() {
-  const res = await fetch('http://localhost:8000/active-configs');
-  const list = await res.json();
-  const sel = document.getElementById('fConfig');
-  sel.innerHTML = '<option value="">— 请选择 API —</option>' +
-    list.map(c => `<option value="${c.id}">${c.name}（${c.provider || ''}）</option>`).join('');
+// ── 审核管理（管理员） ────────────────────────────────────
+let reviewingId = null;
+
+async function loadReview() {
+  const res = await fetch('http://localhost:8000/admin/api-requests', { headers: ADMIN_HEADERS });
+  const list = await res.json().catch(() => []);
+  const tbody = document.getElementById('reviewTbody');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:32px">暂无申请</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  list.forEach(r => {
+    const [label,cls] = STATUS[r.status] || ['未知','badge-gray'];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${r.username}</td>
+      <td>${r.config_name}<br><small style="color:var(--text-muted)">${r.provider}</small></td>
+      <td>${r.project_name}</td>
+      <td style="max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r.purpose}">${r.purpose}</td>
+      <td>${r.lead}</td><td>${r.budget}</td>
+      <td><span class="badge ${cls}">${label}</span></td>
+      <td>${r.created_at.slice(0,10)}</td>
+      <td>${r.status === 'pending'
+        ? `<button class="btn btn-primary" style="padding:4px 10px;font-size:.8rem" data-id="${r.id}">审核</button>`
+        : `<span style="color:var(--text-muted);font-size:.82rem">${r.review_note || '—'}</span>`
+      }</td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll('[data-id]').forEach(b =>
+    b.addEventListener('click', () => {
+      reviewingId = b.dataset.id;
+      document.getElementById('reviewNote').value = '';
+      document.getElementById('reviewBg').classList.add('open');
+    }));
 }
 
-loadRequests();
+document.getElementById('reviewCancel').addEventListener('click',  () => document.getElementById('reviewBg').classList.remove('open'));
+document.getElementById('reviewApprove').addEventListener('click', () => doReview('approved'));
+document.getElementById('reviewReject').addEventListener('click',  () => doReview('rejected'));
 
-document.getElementById('applyBtn').addEventListener('click', () => {
-  loadConfigs();
+async function doReview(status) {
+  const note = document.getElementById('reviewNote').value.trim();
+  await fetch(`http://localhost:8000/admin/api-requests/${reviewingId}`, {
+    method: 'PUT', headers: ADMIN_HEADERS,
+    body: JSON.stringify({ status, review_note: note }),
+  });
+  document.getElementById('reviewBg').classList.remove('open');
+  loadReview();
+}
+
+// ── 新增申请弹窗 ──────────────────────────────────────────
+document.getElementById('applyBtn').addEventListener('click', async () => {
+  const res = await fetch('http://localhost:8000/active-configs');
+  const list = await res.json().catch(() => []);
+  document.getElementById('fConfig').innerHTML =
+    '<option value="">— 请选择 API —</option>' +
+    list.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  ['fProject','fPurpose','fLead','fBudget','fSub'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('modalErr').textContent = '';
-  document.getElementById('fProject').value = '';
-  document.getElementById('fPurpose').value = '';
-  document.getElementById('fLead').value = '';
-  document.getElementById('fBudget').value = '';
-  document.getElementById('fSub').value = '';
   document.getElementById('modalBg').classList.add('open');
 });
 
-document.getElementById('cancelBtn').addEventListener('click', () =>
-  document.getElementById('modalBg').classList.remove('open'));
-
+document.getElementById('cancelBtn').addEventListener('click', () => document.getElementById('modalBg').classList.remove('open'));
 document.getElementById('modalBg').addEventListener('click', e => {
-  if (e.target === document.getElementById('modalBg'))
-    document.getElementById('modalBg').classList.remove('open');
+  if (e.target === document.getElementById('modalBg')) document.getElementById('modalBg').classList.remove('open');
 });
 
 document.getElementById('submitBtn').addEventListener('click', async () => {
   const err = document.getElementById('modalErr');
   err.textContent = '';
-  const config_id = parseInt(document.getElementById('fConfig').value);
+  const config_id    = parseInt(document.getElementById('fConfig').value);
   const project_name = document.getElementById('fProject').value.trim();
-  const purpose = document.getElementById('fPurpose').value.trim();
-  const lead = document.getElementById('fLead').value.trim();
-  const budget = document.getElementById('fBudget').value.trim();
+  const purpose      = document.getElementById('fPurpose').value.trim();
+  const lead         = document.getElementById('fLead').value.trim();
+  const budget       = document.getElementById('fBudget').value.trim();
   const sub_accounts = document.getElementById('fSub').value.trim();
-  if (!config_id) { err.textContent = '请选择 API'; return; }
+  if (!config_id)    { err.textContent = '请选择 API'; return; }
   if (!project_name) { err.textContent = '请输入需求项目'; return; }
-  if (!purpose) { err.textContent = '请输入需求目的'; return; }
-  if (!lead) { err.textContent = '请输入项目负责人'; return; }
-  if (!budget) { err.textContent = '请输入需求预算'; return; }
+  if (!purpose)      { err.textContent = '请输入需求目的'; return; }
+  if (!lead)         { err.textContent = '请输入项目负责人'; return; }
+  if (!budget)       { err.textContent = '请输入需求预算'; return; }
   try {
     const res = await fetch('http://localhost:8000/api-requests', {
-      method: 'POST',
-      headers: authHeaders(),
+      method: 'POST', headers: authHeaders(),
       body: JSON.stringify({ config_id, project_name, purpose, lead, budget, sub_accounts }),
     });
     if (!res.ok) { const d = await res.json(); throw new Error(d.detail); }
     document.getElementById('modalBg').classList.remove('open');
-    loadRequests();
+    loadMyRequests();
   } catch(e) { err.textContent = '提交失败：' + e.message; }
 });
+
+loadMyRequests();
 </script>
 </body>
 </html>
