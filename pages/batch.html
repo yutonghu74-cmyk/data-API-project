@@ -5,9 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>批量处理 — 数据平台</title>
   <link rel="stylesheet" href="../assets/css/platform.css">
+  <script>if(new URLSearchParams(location.search).get('embed')==='1')document.documentElement.classList.add('embed-mode');</script>
   <!-- SheetJS for Excel parsing -->
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
   <style>
+    html.embed-mode .breadcrumb,
+    html.embed-mode .sidebar { display: none !important; }
+    html.embed-mode .layout { padding-top: 0 !important; }
+    html.embed-mode .main { margin-left: 0 !important; padding: 16px !important; }
     .steps { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
     .step-btn {
       padding: 10px 20px; font-size: .88rem; cursor: pointer;
@@ -189,20 +194,15 @@ import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js
 if (!requireLogin()) throw new Error('redirect');
 
 const user = getUser();
-const isEmbed = new URLSearchParams(location.search).get('embed') === '1';
-if (isEmbed) {
-  document.querySelector('.breadcrumb').style.display = 'none';
-  document.querySelector('.sidebar').style.display = 'none';
-  document.querySelector('.main').style.marginLeft = '0';
-  document.querySelector('.layout').style.paddingTop = '0';
-  document.body.style.paddingTop = '0';
-}
+const isEmbed = document.documentElement.classList.contains('embed-mode');
 
-document.getElementById('userBar').innerHTML = isEmbed ? '' : `
-  <span class="username">${user.username}${user.role==='admin'?'（管理员）':''}</span>
-  <button class="logout" id="logoutBtn">退出</button>`;
-if (!isEmbed) document.getElementById('logoutBtn')?.addEventListener('click', () => logout());
-if (user.role === 'admin' && !isEmbed) { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; }
+if (!isEmbed) {
+  document.getElementById('userBar').innerHTML = `
+    <span class="username">${user.username}${user.role==='admin'?'（管理员）':''}</span>
+    <button class="logout" id="logoutBtn">退出</button>`;
+  document.getElementById('logoutBtn').addEventListener('click', () => logout());
+  if (user.role === 'admin') { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; }
+}
 
 // ── ClickHouse 状态检查 ───────────────────────────────────
 fetch('http://localhost:8000/clickhouse/status', { headers: authHeaders() })
