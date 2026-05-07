@@ -103,6 +103,7 @@ class ChatRequest(BaseModel):
     messages: list[Message]
     model: str = "claude-sonnet-4-6"
     system: str = ""
+    config_id: int | None = None
 
 @app.get("/health")
 def health():
@@ -117,7 +118,14 @@ async def chat(req: ChatRequest):
     if req.model not in MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model: {req.model}")
 
+    start_time = time.time()
+    called_at  = datetime.now(timezone.utc).isoformat()
+
     def generate():
+        input_tokens  = 0
+        output_tokens = 0
+        success       = 1
+        error_msg     = None
         try:
             kwargs = dict(
                 model=req.model,
@@ -130,9 +138,26 @@ async def chat(req: ChatRequest):
             with client.messages.stream(**kwargs) as stream:
                 for text in stream.text_stream:
                     yield f"data: {json.dumps({'text': text})}\n\n"
+                usage = stream.get_final_message().usage
+                input_tokens  = usage.input_tokens
+                output_tokens = usage.output_tokens
             yield "data: [DONE]\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            success   = 0
+            error_msg = str(e)
+            yield f"data: {json.dumps({'error': error_msg})}\n\n"
+        finally:
+            if req.config_id is not None:
+                duration_ms = int((time.time() - start_time) * 1000)
+                try:
+                    with get_db() as conn:
+                        conn.execute(
+                            "INSERT INTO usage_stats (config_id,called_at,model,input_tokens,output_tokens,success,duration_ms,error_msg) VALUES (?,?,?,?,?,?,?,?)",
+                            (req.config_id, called_at, req.model, input_tokens, output_tokens, success, duration_ms, error_msg)
+                        )
+                        conn.commit()
+                except Exception:
+                    pass
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
