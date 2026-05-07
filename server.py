@@ -21,8 +21,46 @@ from fastapi.responses import JSONResponse
 DB_PATH = os.path.join(os.path.dirname(__file__), "admin.db")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")  # 建议在 .env 中设置强密码
 
+import hashlib
+import secrets
+
+def hash_password(pwd: str) -> str:
+    return hashlib.sha256(pwd.encode()).hexdigest()
+
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                username   TEXT NOT NULL UNIQUE,
+                password   TEXT NOT NULL,
+                role       TEXT DEFAULT 'user',
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_tokens (
+                token      TEXT PRIMARY KEY,
+                user_id    INTEGER REFERENCES users(id),
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_requests (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER REFERENCES users(id),
+                config_id    INTEGER REFERENCES api_configs(id),
+                project_name TEXT NOT NULL,
+                purpose      TEXT NOT NULL,
+                lead         TEXT NOT NULL,
+                budget       TEXT NOT NULL,
+                sub_accounts TEXT DEFAULT '',
+                status       TEXT DEFAULT 'pending',
+                review_note  TEXT DEFAULT '',
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL
+            )
+        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS api_configs (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -316,6 +354,152 @@ def daily_stats(config_id: int, x_admin_password: str = Header(default="")):
             GROUP BY day ORDER BY day
         """, (config_id,)).fetchall()
     return [{"day": r["day"], "count": r["cnt"]} for r in rows]
+
+# ── Auth ──────────────────────────────────────────────────
+
+class RegisterIn(BaseModel):
+    username: str
+    password: str
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+def get_current_user(x_token: str = Header(default="")):
+    if not x_token:
+        raise HTTPException(status_code=401, detail="未登录")
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT u.* FROM users u JOIN user_tokens t ON t.user_id=u.id WHERE t.token=?", (x_token,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="登录已过期")
+    return dict(row)
+
+@app.post("/auth/register")
+def register(body: RegisterIn):
+    if not body.username.strip() or not body.password.strip():
+        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO users (username, password, created_at) VALUES (?,?,?)",
+                (body.username.strip(), hash_password(body.password), now)
+            )
+            conn.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    return {"ok": True}
+
+@app.post("/auth/login")
+def user_login(body: LoginIn):
+    with get_db() as conn:
+        user = conn.execute(
+            "SELECT * FROM users WHERE username=? AND password=?",
+            (body.username.strip(), hash_password(body.password))
+        ).fetchone()
+    if not user:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    token = secrets.token_hex(32)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute("INSERT INTO user_tokens (token, user_id, created_at) VALUES (?,?,?)",
+                     (token, user["id"], now))
+        conn.commit()
+    return {"token": token, "user": {"id": user["id"], "username": user["username"], "role": user["role"]}}
+
+@app.post("/auth/logout")
+def user_logout(x_token: str = Header(default="")):
+    with get_db() as conn:
+        conn.execute("DELETE FROM user_tokens WHERE token=?", (x_token,))
+        conn.commit()
+    return {"ok": True}
+
+@app.get("/auth/me")
+def me(x_token: str = Header(default="")):
+    return get_current_user(x_token)
+
+# ── API 申请 ───────────────────────────────────────────────
+
+class RequestIn(BaseModel):
+    config_id: int
+    project_name: str
+    purpose: str
+    lead: str
+    budget: str
+    sub_accounts: str = ""
+
+@app.post("/api-requests")
+def create_request(body: RequestIn, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO api_requests (user_id,config_id,project_name,purpose,lead,budget,sub_accounts,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (user["id"], body.config_id, body.project_name, body.purpose, body.lead, body.budget, body.sub_accounts, now, now)
+        )
+        conn.commit()
+    return {"id": cur.lastrowid}
+
+@app.get("/api-requests/my")
+def my_requests(x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT r.*, c.name as config_name, c.provider, c.base_url
+            FROM api_requests r
+            JOIN api_configs c ON c.id = r.config_id
+            WHERE r.user_id=?
+            ORDER BY r.created_at DESC
+        """, (user["id"],)).fetchall()
+    return [dict(r) for r in rows]
+
+@app.get("/api-requests/approved")
+def approved_configs(x_token: str = Header(default="")):
+    """返回当前用户已审核通过的 API 配置列表（用于聊天页下拉）。"""
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT c.id, c.name, c.provider, c.base_url, c.created_at, c.updated_at,
+                   r.id as request_id
+            FROM api_requests r
+            JOIN api_configs c ON c.id = r.config_id
+            WHERE r.user_id=? AND r.status='approved' AND c.is_active=1
+            ORDER BY c.name
+        """, (user["id"],)).fetchall()
+    return [dict(r) for r in rows]
+
+# ── Admin: 申请审核 ────────────────────────────────────────
+
+class ReviewIn(BaseModel):
+    status: Literal["approved", "rejected"]
+    review_note: str = ""
+
+@app.get("/admin/api-requests")
+def admin_list_requests(x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT r.*, u.username, c.name as config_name, c.provider
+            FROM api_requests r
+            JOIN users u ON u.id = r.user_id
+            JOIN api_configs c ON c.id = r.config_id
+            ORDER BY r.created_at DESC
+        """).fetchall()
+    return [dict(r) for r in rows]
+
+@app.put("/admin/api-requests/{req_id}")
+def admin_review_request(req_id: int, body: ReviewIn, x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE api_requests SET status=?, review_note=?, updated_at=? WHERE id=?",
+            (body.status, body.review_note, now, req_id)
+        )
+        conn.commit()
+    return {"ok": True}
 
 if __name__ == "__main__":
     import uvicorn
