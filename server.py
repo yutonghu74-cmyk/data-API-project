@@ -123,6 +123,18 @@ def health():
 def models():
     return {"models": MODELS}
 
+@app.get("/active-configs")
+def active_configs():
+    """返回所有激活的 anthropic 配置列表（仅 id 和 name，不暴露密钥）。"""
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT id, name FROM api_configs WHERE provider='anthropic' AND is_active=1 ORDER BY id DESC"
+            ).fetchall()
+        return [{"id": r["id"], "name": r["name"]} for r in rows]
+    except Exception:
+        return []
+
 @app.get("/active-config")
 def active_config():
     """返回当前激活的 anthropic 配置 ID，供前端带入 /chat 请求以记录统计。"""
