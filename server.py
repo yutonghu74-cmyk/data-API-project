@@ -66,12 +66,21 @@ def require_admin(x_admin_password: str = Header(default="")):
     if not hmac.compare_digest(x_admin_password, ADMIN_PASSWORD):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-api_key = os.environ.get("ANTHROPIC_API_KEY")
-if not api_key:
-    print("ERROR: ANTHROPIC_API_KEY environment variable is not set.")
-    sys.exit(1)
+_env_api_key = os.environ.get("ANTHROPIC_API_KEY")
+if not _env_api_key:
+    print("WARNING: ANTHROPIC_API_KEY not set. Will use key from admin database.")
 
-client = anthropic.Anthropic(api_key=api_key)
+def get_active_anthropic_key() -> str | None:
+    """从 api_configs 表读取 provider=anthropic 且 is_active=1 的最新密钥。"""
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT api_key FROM api_configs WHERE provider='anthropic' AND is_active=1 ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return row["api_key"] if row else None
+    except Exception:
+        return None
+
 app = FastAPI()
 
 app.add_middleware(
@@ -114,6 +123,18 @@ def health():
 def models():
     return {"models": MODELS}
 
+@app.get("/active-config")
+def active_config():
+    """返回当前激活的 anthropic 配置 ID，供前端带入 /chat 请求以记录统计。"""
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id FROM api_configs WHERE provider='anthropic' AND is_active=1 ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return {"config_id": row["id"] if row else None}
+    except Exception:
+        return {"config_id": None}
+
 @app.post("/chat")
 async def chat(req: ChatRequest):
     if req.model not in MODELS:
@@ -123,6 +144,11 @@ async def chat(req: ChatRequest):
     called_at  = datetime.now(timezone.utc).isoformat()
 
     def generate():
+        _key = get_active_anthropic_key() or _env_api_key
+        if not _key:
+            yield f"data: {json.dumps({'error': '未配置 API Key，请在管理员面板添加 Anthropic 配置'})}\n\n"
+            return
+        _client = anthropic.Anthropic(api_key=_key)
         input_tokens  = 0
         output_tokens = 0
         success       = 1
@@ -136,7 +162,7 @@ async def chat(req: ChatRequest):
             if req.system:
                 kwargs["system"] = req.system
 
-            with client.messages.stream(**kwargs) as stream:
+            with _client.messages.stream(**kwargs) as stream:
                 for text in stream.text_stream:
                     yield f"data: {json.dumps({'text': text})}\n\n"
                 usage = stream.get_final_message().usage
