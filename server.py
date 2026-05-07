@@ -87,6 +87,17 @@ def init_db():
             )
         """)
         conn.commit()
+        # 初始化默认管理员账号（仅首次，已存在则跳过）
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            conn.execute(
+                "INSERT INTO users (username, password, role, created_at) VALUES (?,?,?,?)",
+                ("admin", hash_password("admin123"), "admin", now)
+            )
+            conn.commit()
+            print("INFO: 默认管理员账号已创建 (admin / admin123)")
+        except Exception:
+            pass  # 已存在则跳过
 
 init_db()
 
@@ -500,6 +511,15 @@ def admin_review_request(req_id: int, body: ReviewIn, x_admin_password: str = He
         )
         conn.commit()
     return {"ok": True}
+
+# ── Admin: 用户列表 ───────────────────────────────────────
+
+@app.get("/admin/users")
+def list_users(x_admin_password: str = Header(default="")):
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        rows = conn.execute("SELECT id, username, role, created_at FROM users ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
 
 # ── 保存结果到本地文件 ─────────────────────────────────────
 

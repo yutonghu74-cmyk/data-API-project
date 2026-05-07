@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理员面板 — 数据平台</title>
+  <link rel="stylesheet" href="../assets/css/platform.css">
+  <style>
+    .stat-card {
+      background: #fff; border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px; cursor: pointer;
+      transition: border-color .2s;
+    }
+    .stat-card:hover { border-color: var(--green); }
+    .stat-card h3 { font-size: .9rem; color: var(--text-muted); margin-bottom: 8px; }
+    .stat-card .val { font-size: 1.6rem; font-weight: 700; color: var(--text); }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap: 16px; }
+    .chart-wrap { display: none; margin-top: 14px; }
+    .chart-wrap.open { display: block; }
+    .chart-svg { width: 100%; height: 80px; }
+    .chart-label { display: flex; justify-content: space-between; font-size: .7rem; color: var(--text-muted); margin-top: 4px; }
+  </style>
+</head>
+<body>
+<!-- 面包屑 -->
+<div class="breadcrumb">
+  <span class="brand">数据平台</span>
+  <span class="sep">›</span>
+  <span class="current">管理员面板</span>
+  <div class="breadcrumb-right" id="userBar"></div>
+</div>
+
+<div class="layout">
+  <!-- 侧边栏 -->
+  <div class="sidebar">
+    <div class="sidebar-group open" id="sg1">
+      <div class="sidebar-group-title" onclick="document.getElementById('sg1').classList.toggle('open')">
+        三方API管理 <span class="arrow">›</span>
+      </div>
+      <div class="sidebar-children">
+        <a href="#" class="sidebar-item active" data-page="requests">申请审核</a>
+        <a href="#" class="sidebar-item" data-page="keys">密钥管理</a>
+        <a href="#" class="sidebar-item" data-page="stats">使用统计</a>
+        <a href="#" class="sidebar-item" data-page="users">用户管理</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主内容 -->
+  <div class="main">
+
+    <!-- 申请审核 -->
+    <div class="page active" id="page-requests">
+      <div class="toolbar">
+        <span class="page-title" style="margin:0">申请审核</span>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>用户</th><th>API</th><th>需求项目</th><th>需求目的</th><th>负责人</th><th>预算</th><th>状态</th><th>申请时间</th><th>操作</th></tr>
+            </thead>
+            <tbody id="reqTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 密钥管理 -->
+    <div class="page" id="page-keys">
+      <div class="toolbar">
+        <span class="page-title" style="margin:0">密钥管理</span>
+        <button class="btn btn-primary" id="addConfigBtn">+ 新增配置</button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>名称</th><th>供应商</th><th>密钥</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+            </thead>
+            <tbody id="configTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 使用统计 -->
+    <div class="page" id="page-stats">
+      <p class="page-title">使用统计</p>
+      <div class="stats-grid" id="statsGrid"></div>
+    </div>
+
+    <!-- 用户管理 -->
+    <div class="page" id="page-users">
+      <p class="page-title">用户管理</p>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>用户名</th><th>角色</th><th>注册时间</th></tr>
+            </thead>
+            <tbody id="userTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- 新增/编辑密钥弹窗 -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h3 id="modalTitle">新增配置</h3>
+    <div class="form-group"><label>名称</label><input id="fName" placeholder="如 Claude Sonnet"></div>
+    <div class="form-group"><label>供应商</label><input id="fProvider" placeholder="如 anthropic"></div>
+    <div class="form-group"><label>Base URL</label><input id="fBaseUrl" placeholder="https://api.anthropic.com/v1"></div>
+    <div class="form-group"><label>API Key</label><input id="fApiKey" type="password" placeholder="sk-ant-..."></div>
+    <p style="color:#dc2626;font-size:.83rem;min-height:18px" id="modalError"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="cancelBtn">取消</button>
+      <button class="btn btn-primary" id="saveBtn">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 审核弹窗 -->
+<div class="modal-bg" id="reviewBg">
+  <div class="modal">
+    <h3 id="reviewTitle">审核申请</h3>
+    <div class="form-group"><label>审核意见（可选）</label><textarea id="reviewNote" rows="3" placeholder="填写通过或拒绝的理由…"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="reviewCancel">取消</button>
+      <button class="btn btn-danger"    id="reviewReject">拒绝</button>
+      <button class="btn btn-primary"   id="reviewApprove">通过</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js';
+if (!requireLogin()) throw new Error('redirect');
+const user = getUser();
+if (user.role !== 'admin') { window.location.href = '/pages/claude.html'; throw new Error('not admin'); }
+
+document.getElementById('userBar').innerHTML = `
+  <span class="username">${user.username}（管理员）</span>
+  <button class="logout" id="logoutBtn">退出</button>`;
+document.getElementById('logoutBtn').addEventListener('click', () => logout());
+
+const ADMIN_PWD = 'admin123'; // 兼容旧端点
+const ADMIN_HEADERS = { 'Content-Type':'application/json', 'X-Admin-Password': ADMIN_PWD };
+
+// ── 导航 ──────────────────────────────────────────────────
+document.querySelectorAll('[data-page]').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    document.querySelectorAll('[data-page]').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    a.classList.add('active');
+    document.getElementById('page-' + a.dataset.page).classList.add('active');
+    if (a.dataset.page === 'requests') loadRequests();
+    if (a.dataset.page === 'keys')     loadConfigs();
+    if (a.dataset.page === 'stats')    loadStats();
+    if (a.dataset.page === 'users')    loadUsers();
+  });
+});
+
+// ── 申请审核 ──────────────────────────────────────────────
+let reviewingId = null;
+
+async function loadRequests() {
+  const res = await fetch('http://localhost:8000/admin/api-requests', { headers: ADMIN_HEADERS });
+  const list = await res.json().catch(() => []);
+  const tbody = document.getElementById('reqTbody');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:32px">暂无申请</td></tr>';
+    return;
+  }
+  const S = { pending:['审核中','badge-yellow'], approved:['已通过','badge-green'], rejected:['已拒绝','badge-red'] };
+  tbody.innerHTML = '';
+  list.forEach(r => {
+    const [label,cls] = S[r.status]||['未知','badge-gray'];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${r.username}</td>
+      <td>${r.config_name}<br><small style="color:var(--text-muted)">${r.provider}</small></td>
+      <td>${r.project_name}</td>
+      <td style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r.purpose}">${r.purpose}</td>
+      <td>${r.lead}</td>
+      <td>${r.budget}</td>
+      <td><span class="badge ${cls}">${label}</span></td>
+      <td>${r.created_at.slice(0,10)}</td>
+      <td>${r.status==='pending'
+        ? `<button class="btn btn-primary" style="padding:4px 10px;font-size:.8rem" data-id="${r.id}">审核</button>`
+        : `<span style="color:var(--text-muted);font-size:.82rem">${r.review_note||'—'}</span>`
+      }</td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll('[data-id]').forEach(b =>
+    b.addEventListener('click', () => openReview(b.dataset.id)));
+}
+
+function openReview(id) {
+  reviewingId = id;
+  document.getElementById('reviewNote').value = '';
+  document.getElementById('reviewBg').classList.add('open');
+}
+
+document.getElementById('reviewCancel').addEventListener('click',  () => document.getElementById('reviewBg').classList.remove('open'));
+document.getElementById('reviewApprove').addEventListener('click', () => doReview('approved'));
+document.getElementById('reviewReject').addEventListener('click',  () => doReview('rejected'));
+
+async function doReview(status) {
+  const note = document.getElementById('reviewNote').value.trim();
+  await fetch(`http://localhost:8000/admin/api-requests/${reviewingId}`, {
+    method: 'PUT', headers: ADMIN_HEADERS,
+    body: JSON.stringify({ status, review_note: note }),
+  });
+  document.getElementById('reviewBg').classList.remove('open');
+  loadRequests();
+}
+
+// ── 密钥管理 ──────────────────────────────────────────────
+let editingId = null;
+
+async function loadConfigs() {
+  const res = await fetch('http://localhost:8000/admin/configs', { headers: ADMIN_HEADERS });
+  const list = await res.json().catch(() => []);
+  const tbody = document.getElementById('configTbody');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px">暂无配置</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  list.forEach(c => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${c.name}</td><td>${c.provider}</td>
+      <td><code style="font-size:.82rem">${c.api_key}</code></td>
+      <td><span class="badge ${c.is_active?'badge-green':'badge-gray'}">${c.is_active?'启用':'禁用'}</span></td>
+      <td>${c.created_at.slice(0,10)}</td>
+      <td>
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:.8rem" data-edit="${c.id}">编辑</button>
+        <button class="btn btn-danger"    style="padding:4px 10px;font-size:.8rem" data-del="${c.id}">删除</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openEdit(list.find(x=>x.id==b.dataset.edit))));
+  tbody.querySelectorAll('[data-del]').forEach(b  => b.addEventListener('click', () => confirmDel(b.dataset.del)));
+}
+
+document.getElementById('addConfigBtn').addEventListener('click', () => {
+  editingId = null;
+  document.getElementById('modalTitle').textContent = '新增配置';
+  ['fName','fProvider','fBaseUrl','fApiKey'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('modalError').textContent = '';
+  document.getElementById('modalBg').classList.add('open');
+});
+
+document.getElementById('cancelBtn').addEventListener('click', () => document.getElementById('modalBg').classList.remove('open'));
+
+function openEdit(c) {
+  editingId = c.id;
+  document.getElementById('modalTitle').textContent = '编辑配置';
+  document.getElementById('fName').value = c.name;
+  document.getElementById('fProvider').value = c.provider;
+  document.getElementById('fBaseUrl').value = c.base_url;
+  document.getElementById('fApiKey').value = '';
+  document.getElementById('modalError').textContent = '';
+  document.getElementById('modalBg').classList.add('open');
+}
+
+document.getElementById('saveBtn').addEventListener('click', async () => {
+  const err = document.getElementById('modalError');
+  const name = document.getElementById('fName').value.trim();
+  const provider = document.getElementById('fProvider').value.trim();
+  const base_url = document.getElementById('fBaseUrl').value.trim();
+  const api_key  = document.getElementById('fApiKey').value.trim();
+  if (!name||!provider||!base_url) { err.textContent='名称、供应商、Base URL 不能为空'; return; }
+  if (!editingId && !api_key) { err.textContent='API Key 不能为空'; return; }
+  const body = { name, provider, base_url, api_key: api_key||'(unchanged)', is_active:1 };
+  try {
+    if (editingId)
+      await fetch(`http://localhost:8000/admin/configs/${editingId}`, { method:'PUT', headers:ADMIN_HEADERS, body:JSON.stringify(body) });
+    else
+      await fetch('http://localhost:8000/admin/configs', { method:'POST', headers:ADMIN_HEADERS, body:JSON.stringify(body) });
+    document.getElementById('modalBg').classList.remove('open');
+    loadConfigs();
+  } catch(e) { err.textContent = '保存失败'; }
+});
+
+async function confirmDel(id) {
+  if (!confirm('确定删除此配置？')) return;
+  await fetch(`http://localhost:8000/admin/configs/${id}`, { method:'DELETE', headers:ADMIN_HEADERS });
+  loadConfigs();
+}
+
+// ── 使用统计 ──────────────────────────────────────────────
+async function loadStats() {
+  const res = await fetch('http://localhost:8000/admin/stats', { headers: ADMIN_HEADERS });
+  const list = await res.json().catch(() => []);
+  const grid = document.getElementById('statsGrid');
+  if (!list.length) { grid.innerHTML = '<p style="color:var(--text-muted)">暂无统计数据</p>'; return; }
+  grid.innerHTML = '';
+  list.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'stat-card';
+    card.innerHTML = `
+      <h3>${s.name} <span style="font-size:.75rem;color:var(--text-muted)">${s.provider}</span></h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.85rem">
+        <div><div style="color:var(--text-muted)">调用次数</div><div style="font-weight:600">${s.total_calls}</div></div>
+        <div><div style="color:var(--text-muted)">成功率</div><div style="font-weight:600">${s.success_rate}%</div></div>
+        <div><div style="color:var(--text-muted)">累计Token</div><div style="font-weight:600">${s.total_tokens.toLocaleString()}</div></div>
+        <div><div style="color:var(--text-muted)">平均耗时</div><div style="font-weight:600">${s.avg_duration_ms}ms</div></div>
+      </div>
+      <div class="chart-wrap" id="chart-${s.config_id}">
+        <div style="font-size:.75rem;color:var(--text-muted);margin:10px 0 4px">近7天趋势</div>
+        <svg class="chart-svg" id="svg-${s.config_id}" viewBox="0 0 260 60" preserveAspectRatio="none"></svg>
+        <div class="chart-label" id="label-${s.config_id}"></div>
+      </div>`;
+    card.addEventListener('click', () => toggleChart(s.config_id));
+    grid.appendChild(card);
+  });
+}
+
+async function toggleChart(id) {
+  const wrap = document.getElementById('chart-'+id);
+  if (wrap.classList.contains('open')) { wrap.classList.remove('open'); return; }
+  wrap.classList.add('open');
+  const res = await fetch(`http://localhost:8000/admin/stats/${id}/daily`, { headers: ADMIN_HEADERS });
+  const data = await res.json().catch(() => []);
+  const days = Array.from({length:7},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()-6+i); return d.toISOString().slice(0,10); });
+  const map = Object.fromEntries(data.map(d=>[d.day,d.count]));
+  const vals = days.map(d=>map[d]||0);
+  const max = Math.max(...vals,1);
+  const W=260,H=60,pad=10;
+  const xs = days.map((_,i)=>pad+i*((W-pad*2)/6));
+  const ys = vals.map(v=>H-pad-(v/max)*(H-pad*2));
+  document.getElementById('svg-'+id).innerHTML =
+    `<polyline points="${xs.map((x,i)=>`${x},${ys[i]}`).join(' ')}" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round"/>
+     ${xs.map((x,i)=>`<circle cx="${x}" cy="${ys[i]}" r="3" fill="var(--green)"/>`).join('')}`;
+  document.getElementById('label-'+id).innerHTML = days.map(d=>`<span>${d.slice(5)}</span>`).join('');
+}
+
+// ── 用户管理 ──────────────────────────────────────────────
+async function loadUsers() {
+  const res = await fetch('http://localhost:8000/admin/users', { headers: ADMIN_HEADERS });
+  const list = await res.json().catch(() => []);
+  const tbody = document.getElementById('userTbody');
+  tbody.innerHTML = list.map(u => `<tr>
+    <td>${u.username}</td>
+    <td><span class="badge ${u.role==='admin'?'badge-green':'badge-gray'}">${u.role==='admin'?'管理员':'普通用户'}</span></td>
+    <td>${u.created_at.slice(0,10)}</td>
+  </tr>`).join('');
+}
+
+// 初始加载申请列表
+loadRequests();
+</script>
+</body>
+</html>

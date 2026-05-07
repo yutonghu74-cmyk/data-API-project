@@ -78,7 +78,10 @@
 <script type="module">
 import { login, register, isLoggedIn } from '../assets/js/auth.js';
 
-if (isLoggedIn()) window.location.href = '/pages/claude.html';
+if (isLoggedIn()) {
+  const u = (await import('../assets/js/auth.js')).getUser();
+  window.location.href = u?.role === 'admin' ? '/pages/admin-new.html' : '/pages/claude.html';
+}
 
 // tab 切换
 document.querySelectorAll('.tab').forEach(t => {
@@ -95,11 +98,11 @@ document.getElementById('loginBtn').addEventListener('click', async () => {
   const err = document.getElementById('loginErr');
   err.textContent = '';
   try {
-    await login(
+    const data = await login(
       document.getElementById('loginUser').value.trim(),
       document.getElementById('loginPwd').value
     );
-    window.location.href = '/pages/claude.html';
+    window.location.href = data.user.role === 'admin' ? '/pages/admin-new.html' : '/pages/claude.html';
   } catch (e) { err.textContent = e.message; }
 });
 
