@@ -7,17 +7,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Literal, Optional
+from typing import Literal
 import sqlite3
 import time
 from datetime import datetime, timezone
 from contextlib import contextmanager
-from fastapi import Header
-from fastapi.responses import JSONResponse
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "admin.db")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")  # 建议在 .env 中设置强密码
@@ -256,18 +254,6 @@ def active_configs():
         return [{"id": r["id"], "name": r["name"], "provider": r["provider"]} for r in rows]
     except Exception:
         return []
-
-@app.get("/active-config")
-def active_config():
-    """返回当前激活的 anthropic 配置 ID，供前端带入 /chat 请求以记录统计。"""
-    try:
-        with get_db() as conn:
-            row = conn.execute(
-                "SELECT id FROM api_configs WHERE provider='anthropic' AND is_active=1 ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-        return {"config_id": row["id"] if row else None}
-    except Exception:
-        return {"config_id": None}
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
