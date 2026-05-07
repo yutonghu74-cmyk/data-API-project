@@ -127,12 +127,7 @@ body {
   padding: 28px 32px;
   min-width: 0;
 }
-.page-title {
-  font-size: 1.1rem;
-  font-weight: 600;
-  margin-bottom: 20px;
-  color: var(--text);
-}
+.page-title { display: none; }
 
 /* ── 卡片 ────────────────────────────────────── */
 .card {
