@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>批量处理 — 数据平台</title>
+  <link rel="stylesheet" href="../assets/css/platform.css">
+  <!-- SheetJS for Excel parsing -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <style>
+    .steps { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+    .step-btn {
+      padding: 10px 20px; font-size: .88rem; cursor: pointer;
+      border: none; background: none; color: var(--text-muted);
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .step-btn.active { color: var(--green); border-bottom-color: var(--green); font-weight: 500; }
+    .step-btn.done { color: var(--text-muted); }
+    .step-btn.done::after { content: ' ✓'; color: var(--green); }
+    .step-panel { display: none; }
+    .step-panel.active { display: block; }
+
+    .field-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .field-chip {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 12px; border-radius: 20px; font-size: .85rem; cursor: pointer;
+      border: 1px solid var(--border); background: #fff; color: var(--text-muted);
+      transition: all .15s;
+    }
+    .field-chip.selected { background: var(--green-bg); border-color: var(--green); color: var(--green); font-weight: 500; }
+
+    .preview-table { max-height: 220px; overflow: auto; }
+
+    .progress-bar-wrap { background: var(--surface); border-radius: 6px; height: 10px; margin: 10px 0; overflow: hidden; }
+    .progress-bar { height: 100%; background: var(--green); border-radius: 6px; transition: width .3s; }
+
+    .result-status-ok  { color: var(--green); font-size: .8rem; }
+    .result-status-err { color: #dc2626; font-size: .8rem; }
+    .result-status-ing { color: #f59e0b; font-size: .8rem; }
+
+    .ch-status { display: inline-flex; align-items: center; gap: 6px; font-size: .82rem; }
+    .ch-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .ch-dot.ok  { background: var(--green); }
+    .ch-dot.err { background: #dc2626; }
+    .ch-dot.unk { background: #9ca3af; }
+
+    .template-help { font-size: .8rem; color: var(--text-muted); margin-top: 6px; }
+    code { background: var(--surface); padding: 1px 5px; border-radius: 3px; font-size: .85em; }
+  </style>
+</head>
+<body>
+<div class="breadcrumb">
+  <span class="brand">数据平台</span>
+  <span class="sep">›</span>
+  <a href="#">三方API管理</a>
+  <span class="sep">›</span>
+  <span class="current">批量处理</span>
+  <div class="breadcrumb-right" id="userBar"></div>
+</div>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="sidebar-group open" id="sg1">
+      <div class="sidebar-group-title" onclick="document.getElementById('sg1').classList.toggle('open')">
+        三方API管理 <span class="arrow">›</span>
+      </div>
+      <div class="sidebar-children">
+        <a href="claude.html"  class="sidebar-item">API调用</a>
+        <a href="apply.html"   class="sidebar-item">API申请&审核</a>
+        <a href="keys.html"    class="sidebar-item">密钥管理</a>
+        <a href="stats.html"   class="sidebar-item">使用统计</a>
+        <a href="batch.html"   class="sidebar-item active">批量处理</a>
+        <a href="history.html" class="sidebar-item">历史记录</a>
+        <a href="users.html"   class="sidebar-item" id="usersLink" style="display:none">用户管理</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="toolbar">
+      <span class="page-title" style="margin:0">批量处理</span>
+      <span class="ch-status" id="chStatus">
+        <span class="ch-dot unk" id="chDot"></span>
+        <span id="chText">检查 ClickHouse...</span>
+      </span>
+    </div>
+
+    <!-- 步骤导航 -->
+    <div class="steps">
+      <button class="step-btn active" data-step="1">① 上传文件</button>
+      <button class="step-btn" data-step="2">② 选择字段</button>
+      <button class="step-btn" data-step="3">③ 配置任务</button>
+      <button class="step-btn" data-step="4">④ 批跑 & 结果</button>
+    </div>
+
+    <!-- Step 1: 上传文件 -->
+    <div class="step-panel active" id="step-1">
+      <div class="card">
+        <div class="form-group">
+          <label>选择文件 <span style="color:var(--text-muted);font-weight:400">（支持 CSV / Excel / JSON）</span></label>
+          <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.json" style="padding:6px">
+        </div>
+        <div id="fileInfo" style="font-size:.85rem;color:var(--text-muted);margin-top:8px"></div>
+        <div class="preview-table" id="previewTable" style="margin-top:12px"></div>
+        <div style="margin-top:16px">
+          <button class="btn btn-primary" id="nextStep1" disabled>下一步 →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: 选择字段 -->
+    <div class="step-panel" id="step-2">
+      <div class="card">
+        <p style="font-size:.88rem;color:var(--text-muted);margin-bottom:12px">选择要作为 AI 输入的字段（可多选）：</p>
+        <div class="field-list" id="fieldList"></div>
+        <div style="margin-top:20px;display:flex;gap:10px">
+          <button class="btn btn-secondary" id="prevStep2">← 上一步</button>
+          <button class="btn btn-primary"   id="nextStep2" disabled>下一步 →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: 配置任务 -->
+    <div class="step-panel" id="step-3">
+      <div class="card">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div class="form-group" style="margin:0">
+            <label>任务名称</label>
+            <input id="taskName" placeholder="如：产品评论分析">
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>输出 Label</label>
+            <input id="taskLabel" placeholder="如：sentiment_v1">
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>API 配置</label>
+            <select id="configSelect"><option value="">— 加载中 —</option></select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>模型</label>
+            <select id="modelSelect"><option value="">— 请先选择 API —</option></select>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:16px">
+          <label>Prompt 模板</label>
+          <textarea id="promptTemplate" rows="4"
+            placeholder="使用 {字段名} 引用字段，例如：&#10;请分析以下评论的情感倾向：{评论内容}&#10;产品名称：{产品名}"></textarea>
+          <div class="template-help" id="templateHelp">
+            可用字段：<span id="availableFields">—</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>System Prompt <span style="color:var(--text-muted);font-weight:400">（可选）</span></label>
+          <input id="systemPrompt" placeholder="如：你是一个专业的数据分析师">
+        </div>
+        <div style="margin-top:16px;display:flex;gap:10px">
+          <button class="btn btn-secondary" id="prevStep3">← 上一步</button>
+          <button class="btn btn-primary"   id="nextStep3">开始批跑 →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4: 批跑 & 结果 -->
+    <div class="step-panel" id="step-4">
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span style="font-size:.9rem;font-weight:500" id="progressText">准备中…</span>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" id="stopBtn" style="display:none">停止</button>
+            <button class="btn btn-primary"   id="exportBtn" style="display:none">导出 CSV</button>
+          </div>
+        </div>
+        <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
+        <div style="font-size:.82rem;color:var(--text-muted)" id="progressDetail"></div>
+      </div>
+
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table id="resultTable">
+            <thead id="resultHead"></thead>
+            <tbody id="resultBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js';
+if (!requireLogin()) throw new Error('redirect');
+
+const user = getUser();
+document.getElementById('userBar').innerHTML = `
+  <span class="username">${user.username}${user.role==='admin'?'（管理员）':''}</span>
+  <button class="logout" id="logoutBtn">退出</button>`;
+document.getElementById('logoutBtn').addEventListener('click', () => logout());
+if (user.role === 'admin') { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; }
+
+// ── ClickHouse 状态检查 ───────────────────────────────────
+fetch('http://localhost:8000/clickhouse/status', { headers: authHeaders() })
+  .then(r => r.json())
+  .then(d => {
+    document.getElementById('chDot').className = `ch-dot ${d.connected ? 'ok' : 'err'}`;
+    document.getElementById('chText').textContent = d.connected
+      ? 'ClickHouse 已连接'
+      : `ClickHouse 未连接：${d.error || ''}`;
+  }).catch(() => {
+    document.getElementById('chText').textContent = 'ClickHouse 状态未知';
+  });
+
+// ── 步骤控制 ──────────────────────────────────────────────
+let currentStep = 1;
+function goStep(n) {
+  document.querySelectorAll('.step-btn').forEach(b => {
+    const s = parseInt(b.dataset.step);
+    b.classList.toggle('active', s === n);
+    b.classList.toggle('done', s < n);
+  });
+  document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('step-' + n).classList.add('active');
+  currentStep = n;
+}
+
+// ── 数据状态 ──────────────────────────────────────────────
+let rows = [];        // 原始数据行 [{col:val, ...}]
+let headers = [];     // 所有字段名
+let selectedFields = [];
+let results = [];     // 处理结果
+let running = false;
+let stopFlag = false;
+let currentTaskId = null;
+
+// ── Step 1: 文件上传 ──────────────────────────────────────
+document.getElementById('fileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  try {
+    if (ext === 'csv')         rows = await parseCsv(file);
+    else if (ext === 'json')   rows = await parseJson(file);
+    else if (['xlsx','xls'].includes(ext)) rows = await parseExcel(file);
+    else { alert('不支持的文件格式'); return; }
+
+    headers = rows.length ? Object.keys(rows[0]) : [];
+    document.getElementById('fileInfo').textContent =
+      `✅ 已解析 ${rows.length} 行，${headers.length} 列：${headers.join('、')}`;
+    renderPreview();
+    document.getElementById('nextStep1').disabled = rows.length === 0;
+  } catch(e) {
+    document.getElementById('fileInfo').textContent = `❌ 解析失败：${e.message}`;
+  }
+});
+
+function parseCsv(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const lines = e.target.result.split('\n').filter(l => l.trim());
+      if (!lines.length) { resolve([]); return; }
+      const heads = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g,''));
+      const data = lines.slice(1).map(line => {
+        const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g,''));
+        return Object.fromEntries(heads.map((h,i) => [h, vals[i]||'']));
+      });
+      resolve(data);
+    };
+    reader.onerror = reject;
+    reader.readAsText(file, 'utf-8');
+  });
+}
+
+function parseJson(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const d = JSON.parse(e.target.result);
+        resolve(Array.isArray(d) ? d : [d]);
+      } catch(err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsText(file, 'utf-8');
+  });
+}
+
+function parseExcel(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        resolve(XLSX.utils.sheet_to_json(ws));
+      } catch(err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function renderPreview() {
+  const preview = rows.slice(0, 5);
+  const table = document.getElementById('previewTable');
+  table.innerHTML = `<table>
+    <thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${preview.map(r=>`<tr>${headers.map(h=>`<td>${r[h]??''}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table><p style="font-size:.78rem;color:var(--text-muted);margin-top:6px">预览前5行，共${rows.length}行</p>`;
+}
+
+document.getElementById('nextStep1').addEventListener('click', () => {
+  renderFieldSelector();
+  goStep(2);
+});
+
+// ── Step 2: 选择字段 ──────────────────────────────────────
+function renderFieldSelector() {
+  const list = document.getElementById('fieldList');
+  list.innerHTML = '';
+  selectedFields = [];
+  headers.forEach(h => {
+    const chip = document.createElement('div');
+    chip.className = 'field-chip';
+    chip.textContent = h;
+    chip.addEventListener('click', () => {
+      chip.classList.toggle('selected');
+      selectedFields = [...document.querySelectorAll('.field-chip.selected')].map(c => c.textContent);
+      document.getElementById('nextStep2').disabled = selectedFields.length === 0;
+    });
+    list.appendChild(chip);
+  });
+}
+
+document.getElementById('prevStep2').addEventListener('click', () => goStep(1));
+document.getElementById('nextStep2').addEventListener('click', () => {
+  document.getElementById('availableFields').innerHTML =
+    selectedFields.map(f => `<code>{${f}}</code>`).join(' ');
+  loadConfigs();
+  goStep(3);
+});
+
+// ── Step 3: 配置任务 ──────────────────────────────────────
+async function loadConfigs() {
+  const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
+  const list = await res.json().catch(() => []);
+  const sel = document.getElementById('configSelect');
+  sel.innerHTML = '<option value="">— 请选择 API —</option>' +
+    list.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  if (list.length) {
+    sel.value = list[0].id;
+    loadModels(list[0].id);
+  }
+}
+
+document.getElementById('configSelect').addEventListener('change', e => loadModels(e.target.value));
+
+async function loadModels(configId) {
+  if (!configId) return;
+  const res = await fetch(`http://localhost:8000/configs/${configId}/models`);
+  const data = await res.json().catch(() => ({ models: [] }));
+  const sel = document.getElementById('modelSelect');
+  sel.innerHTML = data.models.length
+    ? data.models.map(m => `<option value="${m}">${m}</option>`).join('')
+    : '<option value="">— 该配置无可用模型 —</option>';
+}
+
+document.getElementById('prevStep3').addEventListener('click', () => goStep(2));
+document.getElementById('nextStep3').addEventListener('click', startBatch);
+
+// ── Step 4: 批跑 ──────────────────────────────────────────
+async function startBatch() {
+  const taskName = document.getElementById('taskName').value.trim() || '批跑任务';
+  const label    = document.getElementById('taskLabel').value.trim();
+  const template = document.getElementById('promptTemplate').value.trim();
+  const system   = document.getElementById('systemPrompt').value.trim();
+  const configId = document.getElementById('configSelect').value;
+  const model    = document.getElementById('modelSelect').value;
+
+  if (!template) { alert('请填写 Prompt 模板'); return; }
+  if (!configId) { alert('请选择 API 配置'); return; }
+  if (!model)    { alert('请选择模型'); return; }
+
+  // 创建批跑任务
+  const startRes = await fetch('http://localhost:8000/batch/start', {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify({
+      task_name: taskName, label, row_count: rows.length,
+      config_id: parseInt(configId),
+      config_name: document.getElementById('configSelect').selectedOptions[0]?.text || '',
+      model,
+    }),
+  });
+  if (!startRes.ok) { alert('创建任务失败，请检查 ClickHouse 连接'); return; }
+  const { task_id } = await startRes.json();
+  currentTaskId = task_id;
+
+  goStep(4);
+  running = true; stopFlag = false;
+  results = [];
+
+  // ── 先将所有输入数据写入 ClickHouse ──
+  document.getElementById('progressText').textContent = '写入输入数据到 ClickHouse…';
+  document.getElementById('progressDetail').textContent = `共 ${rows.length} 行`;
+  try {
+    const inputPayload = rows.map((row, i) => ({
+      row_index: i,
+      input_json: JSON.stringify(row),
+    }));
+    // 分批写入（每批最多200行）
+    const BATCH = 200;
+    for (let b = 0; b < inputPayload.length; b += BATCH) {
+      const chunk = inputPayload.slice(b, b + BATCH);
+      const res = await fetch('http://localhost:8000/batch/inputs', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ task_id, rows: chunk }),
+      });
+      if (!res.ok) throw new Error('写入失败');
+      const pct = Math.min(Math.round((b + chunk.length) / rows.length * 100), 100);
+      document.getElementById('progressBar').style.width = pct + '%';
+    }
+    document.getElementById('progressDetail').textContent = `✅ 输入数据已写入 ClickHouse，开始调用 API…`;
+  } catch(e) {
+    alert('输入数据写入 ClickHouse 失败：' + e.message);
+    running = false; return;
+  }
+
+  // 构建结果表头
+  const resultCols = [...selectedFields, 'AI 结果', '状态'];
+  document.getElementById('resultHead').innerHTML =
+    `<tr><th>#</th>${resultCols.map(c=>`<th>${c}</th>`).join('')}</tr>`;
+  document.getElementById('resultBody').innerHTML = '';
+  document.getElementById('stopBtn').style.display = 'inline-flex';
+  document.getElementById('exportBtn').style.display = 'none';
+
+  let done = 0, errors = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    if (stopFlag) break;
+    const row = rows[i];
+
+    // 构造 prompt
+    let prompt = template;
+    selectedFields.forEach(f => {
+      prompt = prompt.replaceAll(`{${f}}`, row[f] ?? '');
+    });
+
+    // 添加到结果表（进行中状态）
+    const tr = document.createElement('tr');
+    tr.id = `result-row-${i}`;
+    tr.innerHTML = `<td>${i+1}</td>` +
+      selectedFields.map(f => `<td style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${row[f]??''}</td>`).join('') +
+      `<td id="result-text-${i}" style="max-width:300px">—</td>` +
+      `<td><span class="result-status-ing">⏳ 处理中</span></td>`;
+    document.getElementById('resultBody').appendChild(tr);
+    document.getElementById('resultBody').scrollTop = document.getElementById('resultBody').scrollHeight;
+
+    let outputText = '';
+    let success = 1;
+    let errorMsg = '';
+
+    try {
+      const resp = await fetch('http://localhost:8000/chat', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: prompt }],
+          model, system, config_id: parseInt(configId),
+        }),
+      });
+      // 读取 SSE 流
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done: d, value } = await reader.read();
+        if (d) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') break;
+          try {
+            const msg = JSON.parse(raw);
+            if (msg.text) {
+              outputText += msg.text;
+              document.getElementById(`result-text-${i}`).textContent = outputText.slice(0,200) + (outputText.length>200?'…':'');
+            }
+            if (msg.error) { success = 0; errorMsg = msg.error; }
+          } catch {}
+        }
+      }
+      done++;
+    } catch(e) {
+      success = 0; errorMsg = e.message; errors++;
+    }
+
+    // 更新行状态
+    const lastTd = tr.querySelectorAll('td');
+    lastTd[lastTd.length-1].innerHTML = success
+      ? '<span class="result-status-ok">✅ 完成</span>'
+      : `<span class="result-status-err" title="${errorMsg}">❌ 失败</span>`;
+
+    // 写入 ClickHouse
+    fetch('http://localhost:8000/batch/row', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({
+        task_id, row_index: i,
+        input_json: JSON.stringify(row),
+        output_text: outputText,
+        output_type: 'text',
+        output_path: '',
+        label, model, success, error_msg: errorMsg,
+      }),
+    }).catch(() => {});
+
+    results.push({ ...row, 'AI结果': outputText, '状态': success ? '完成' : '失败' });
+
+    // 更新进度
+    const pct = Math.round((i+1)/rows.length*100);
+    document.getElementById('progressBar').style.width = pct + '%';
+    document.getElementById('progressText').textContent = `进度：${i+1} / ${rows.length}`;
+    document.getElementById('progressDetail').textContent =
+      `✅ 完成 ${done}　❌ 失败 ${errors}　⏳ 剩余 ${rows.length-i-1}`;
+  }
+
+  // 完成
+  running = false;
+  document.getElementById('stopBtn').style.display = 'none';
+  document.getElementById('exportBtn').style.display = 'inline-flex';
+  document.getElementById('progressText').textContent =
+    stopFlag ? `已停止（处理了 ${results.length} 行）` : `批跑完成：共 ${results.length} 行`;
+
+  // 通知后端任务完成
+  if (currentTaskId) {
+    fetch(`http://localhost:8000/batch/finish/${currentTaskId}`, {
+      method: 'PUT', headers: authHeaders(),
+    }).catch(() => {});
+  }
+}
+
+document.getElementById('stopBtn').addEventListener('click', () => {
+  stopFlag = true;
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('stopBtn').textContent = '停止中…';
+});
+
+// ── 导出 CSV ──────────────────────────────────────────────
+document.getElementById('exportBtn').addEventListener('click', () => {
+  if (!results.length) return;
+  const keys = Object.keys(results[0]);
+  const csv = [
+    keys.join(','),
+    ...results.map(r => keys.map(k => `"${String(r[k]??'').replace(/"/g,'""')}"`).join(','))
+  ].join('\n');
+  const blob = new Blob(['﻿'+csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `批跑结果_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+});
+</script>
+</body>
+</html>

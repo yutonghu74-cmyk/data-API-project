@@ -1,16 +1,17 @@
 import os
 import sys
 import json
+import uuid
 import anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Literal
+from typing import Literal, Optional
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -695,6 +696,188 @@ def admin_history(user_id: int | None = None, x_admin_password: str = Header(def
                 ORDER BY s.created_at DESC LIMIT 200
             """).fetchall()
     return [dict(r) for r in rows]
+
+# ── ClickHouse ────────────────────────────────────────────
+
+def get_ch_client():
+    try:
+        import clickhouse_connect
+        return clickhouse_connect.get_client(
+            host=os.environ.get("CLICKHOUSE_HOST", "localhost"),
+            port=int(os.environ.get("CLICKHOUSE_PORT", "8123")),
+            database=os.environ.get("CLICKHOUSE_DB", "default"),
+            username=os.environ.get("CLICKHOUSE_USER", "default"),
+            password=os.environ.get("CLICKHOUSE_PASSWORD", ""),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"ClickHouse 连接失败：{e}")
+
+def ensure_ch_tables():
+    try:
+        ch = get_ch_client()
+        ch.command("""
+            CREATE TABLE IF NOT EXISTS batch_tasks (
+                task_id     String,
+                task_name   String,
+                label       String,
+                row_count   UInt32,
+                status      String,
+                config_name String,
+                created_at  DateTime DEFAULT now()
+            ) ENGINE = MergeTree() ORDER BY created_at
+        """)
+        ch.command("""
+            CREATE TABLE IF NOT EXISTS batch_inputs (
+                task_id     String,
+                row_index   UInt32,
+                input_json  String,
+                created_at  DateTime DEFAULT now()
+            ) ENGINE = MergeTree() ORDER BY (task_id, row_index)
+        """)
+        ch.command("""
+            CREATE TABLE IF NOT EXISTS batch_results (
+                task_id     String,
+                row_index   UInt32,
+                input_json  String,
+                output_text String,
+                output_type String,
+                output_path String,
+                label       String,
+                model       String,
+                success     UInt8,
+                error_msg   String,
+                created_at  DateTime DEFAULT now()
+            ) ENGINE = MergeTree() ORDER BY (task_id, row_index)
+        """)
+    except Exception:
+        pass  # ClickHouse 未配置时静默忽略
+
+@app.get("/clickhouse/status")
+def ch_status():
+    """检查 ClickHouse 连接状态。"""
+    try:
+        ch = get_ch_client()
+        ch.command("SELECT 1")
+        return {"connected": True}
+    except Exception as e:
+        return {"connected": False, "error": str(e)}
+
+# ── 批量处理 ───────────────────────────────────────────────
+
+class BatchStartIn(BaseModel):
+    task_name: str
+    label: str = ""
+    row_count: int
+    config_id: int | None = None
+    config_name: str = ""
+    model: str = ""
+
+class BatchRowIn(BaseModel):
+    task_id: str
+    row_index: int
+    input_json: str
+    output_text: str = ""
+    output_type: str = "text"
+    output_path: str = ""
+    label: str = ""
+    model: str = ""
+    success: int = 1
+    error_msg: str = ""
+
+@app.post("/batch/start")
+def batch_start(body: BatchStartIn, x_token: str = Header(default="")):
+    get_current_user(x_token)
+    task_id = str(uuid.uuid4())
+    try:
+        ensure_ch_tables()
+        ch = get_ch_client()
+        ch.insert("batch_tasks", [[
+            task_id, body.task_name, body.label,
+            body.row_count, "running", body.config_name
+        ]], column_names=["task_id","task_name","label","row_count","status","config_name"])
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"ClickHouse 写入失败：{e}")
+    return {"task_id": task_id}
+
+class BatchInputsIn(BaseModel):
+    task_id: str
+    rows: list[dict]  # [{row_index: int, input_json: str}, ...]
+
+@app.post("/batch/inputs")
+def batch_inputs(body: BatchInputsIn, x_token: str = Header(default="")):
+    """批量写入输入数据到 ClickHouse。"""
+    get_current_user(x_token)
+    try:
+        ch = get_ch_client()
+        data = [[body.task_id, r["row_index"], r["input_json"]] for r in body.rows]
+        ch.insert("batch_inputs", data, column_names=["task_id","row_index","input_json"])
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"ClickHouse 写入失败：{e}")
+    return {"ok": True, "count": len(body.rows)}
+
+@app.get("/batch/inputs/{task_id}")
+def get_batch_inputs(task_id: str, x_token: str = Header(default="")):
+    """从 ClickHouse 读取某任务的输入数据。"""
+    get_current_user(x_token)
+    try:
+        ch = get_ch_client()
+        rows = ch.query(
+            "SELECT row_index, input_json FROM batch_inputs WHERE task_id=%(tid)s ORDER BY row_index",
+            parameters={"tid": task_id}
+        )
+        return [{"row_index": r[0], "input_json": r[1]} for r in rows.result_rows]
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+@app.post("/batch/row")
+def batch_row(body: BatchRowIn, x_token: str = Header(default="")):
+    get_current_user(x_token)
+    try:
+        ch = get_ch_client()
+        ch.insert("batch_results", [[
+            body.task_id, body.row_index, body.input_json,
+            body.output_text, body.output_type, body.output_path,
+            body.label, body.model, body.success, body.error_msg
+        ]], column_names=[
+            "task_id","row_index","input_json","output_text",
+            "output_type","output_path","label","model","success","error_msg"
+        ])
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"ClickHouse 写入失败：{e}")
+    return {"ok": True}
+
+@app.put("/batch/finish/{task_id}")
+def batch_finish(task_id: str, x_token: str = Header(default="")):
+    get_current_user(x_token)
+    try:
+        ch = get_ch_client()
+        ch.command(f"ALTER TABLE batch_tasks UPDATE status='completed' WHERE task_id='{task_id}'")
+    except Exception:
+        pass
+    return {"ok": True}
+
+@app.get("/batch/tasks")
+def batch_tasks(x_token: str = Header(default="")):
+    get_current_user(x_token)
+    try:
+        ch = get_ch_client()
+        rows = ch.query("SELECT * FROM batch_tasks ORDER BY created_at DESC LIMIT 100")
+        return [dict(zip(rows.column_names, r)) for r in rows.result_rows]
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+@app.get("/batch/results/{task_id}")
+def batch_results(task_id: str, x_token: str = Header(default="")):
+    get_current_user(x_token)
+    try:
+        ch = get_ch_client()
+        rows = ch.query(
+            "SELECT * FROM batch_results WHERE task_id=%(tid)s ORDER BY row_index",
+            parameters={"tid": task_id}
+        )
+        return [dict(zip(rows.column_names, r)) for r in rows.result_rows]
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 # ── 保存结果到本地文件 ─────────────────────────────────────
 
