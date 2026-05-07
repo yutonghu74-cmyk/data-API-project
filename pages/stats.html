@@ -5,9 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>使用统计 — 数据平台</title>
   <link rel="stylesheet" href="../assets/css/platform.css">
+  <style>
+    .stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .stat-card { background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+    .stat-card .val { font-size: 1.5rem; font-weight: 700; color: var(--text); margin-top: 4px; }
+    .stat-card .lbl { font-size: .8rem; color: var(--text-muted); }
+
+    .detail-row { background: var(--surface); }
+    .detail-wrap { padding: 16px 24px; display: none; }
+    .detail-wrap.open { display: block; }
+
+    .chart-svg { width: 100%; height: 80px; }
+    .chart-label { display: flex; justify-content: space-between; font-size: .7rem; color: var(--text-muted); margin-top: 4px; }
+
+    .expand-btn { cursor: pointer; color: var(--green); font-size: .85rem; background: none; border: none; padding: 0; }
+    .expand-btn:hover { text-decoration: underline; }
+  </style>
 </head>
 <body>
-<!-- 面包屑 -->
 <div class="breadcrumb">
   <span class="brand">数据平台</span>
   <span class="sep">›</span>
@@ -25,10 +40,10 @@
       </div>
       <div class="sidebar-children">
         <a href="claude.html" class="sidebar-item">API调用</a>
-        <a href="apply.html"   class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item">密钥管理</a>
-        <a href="stats.html"   class="sidebar-item active">使用统计</a>
-        <a href="users.html"   class="sidebar-item" id="usersLink" style="display:none">用户管理</a>
+        <a href="apply.html"  class="sidebar-item">API申请&审核</a>
+        <a href="keys.html"   class="sidebar-item">密钥管理</a>
+        <a href="stats.html"  class="sidebar-item active">使用统计</a>
+        <a href="users.html"  class="sidebar-item" id="usersLink" style="display:none">用户管理</a>
       </div>
     </div>
   </div>
@@ -36,14 +51,15 @@
   <div class="main">
     <p class="page-title">使用统计</p>
 
-    <!-- 已授权 API 列表 -->
+    <!-- 汇总卡片（管理员可见） -->
+    <div class="stat-cards" id="summaryCards" style="display:none"></div>
+
+    <!-- 统计列表 -->
     <div class="card" style="padding:0;overflow:hidden">
       <div class="table-wrap">
-        <table>
+        <table id="statsTable">
           <thead>
-            <tr>
-              <th>账号名称</th><th>供应商</th><th>创建时间</th><th>更新时间</th><th>操作</th>
-            </tr>
+            <tr><th>API名称</th><th>供应商</th><th>总调用</th><th>成功率</th><th>累计Token</th><th>平均耗时</th><th>最后使用</th><th>操作</th></tr>
           </thead>
           <tbody id="statsTbody"></tbody>
         </table>
@@ -56,32 +72,137 @@
 import { requireLogin, getUser, refreshUser, authHeaders, logout } from '../assets/js/auth.js';
 if (!requireLogin()) throw new Error('redirect');
 
-const user = await refreshUser();
+const user    = await refreshUser();
+const isAdmin = user.role === 'admin';
+const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
+
 document.getElementById('userBar').innerHTML = `
-  <span class="username">${user.username}${user.role === 'admin' ? '（管理员）' : ''}</span>
+  <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
   <button class="logout" id="logoutBtn">退出</button>`;
 document.getElementById('logoutBtn').addEventListener('click', () => logout());
-if (user.role === 'admin') { const l = document.getElementById('usersLink'); if (l) l.style.display = 'block'; }
+if (isAdmin) { const l = document.getElementById('usersLink'); if (l) l.style.display = 'block'; }
 
 async function loadStats() {
   const tbody = document.getElementById('statsTbody');
+  let statsList = [];
+
   try {
-    const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
-    const list = await res.json();
-    if (!list.length) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:32px">暂无已授权的 API，请先提交申请</td></tr>';
-      return;
+    if (isAdmin) {
+      // 管理员：调用 /admin/stats 获取所有配置统计
+      const res = await fetch('http://localhost:8000/admin/stats', { headers: ADMIN_HEADERS });
+      statsList = await res.json().catch(() => []);
+
+      // 汇总卡片
+      if (statsList.length) {
+        const total  = statsList.reduce((s, r) => s + r.total_calls, 0);
+        const tokens = statsList.reduce((s, r) => s + r.total_tokens, 0);
+        const okRate = statsList.reduce((s, r) => s + r.success_rate, 0) / statsList.length;
+        const avgMs  = statsList.reduce((s, r) => s + r.avg_duration_ms, 0) / statsList.length;
+        document.getElementById('summaryCards').style.display = 'grid';
+        document.getElementById('summaryCards').innerHTML = `
+          <div class="stat-card"><div class="lbl">总调用次数</div><div class="val">${total.toLocaleString()}</div></div>
+          <div class="stat-card"><div class="lbl">平均成功率</div><div class="val">${okRate.toFixed(1)}%</div></div>
+          <div class="stat-card"><div class="lbl">累计 Token</div><div class="val">${tokens.toLocaleString()}</div></div>
+          <div class="stat-card"><div class="lbl">平均耗时</div><div class="val">${avgMs.toFixed(0)} ms</div></div>`;
+      }
+    } else {
+      // 普通用户：只看自己已授权的配置统计
+      const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
+      const approved = await res.json().catch(() => []);
+      // 暂无用户级别调用统计端点，展示已授权列表基本信息
+      statsList = approved.map(c => ({
+        config_id: c.id,
+        name: c.name,
+        provider: c.provider,
+        total_calls: '—',
+        success_rate: '—',
+        total_tokens: '—',
+        avg_duration_ms: '—',
+        last_used: '—',
+      }));
     }
-    tbody.innerHTML = list.map(c => `<tr>
-      <td><strong>${c.name}</strong></td>
-      <td>${c.provider}</td>
-      <td>${c.created_at ? c.created_at.slice(0,10) : '—'}</td>
-      <td>${c.updated_at ? c.updated_at.slice(0,10) : '—'}</td>
-      <td><a href="stats-detail.html?config_id=${c.id}" class="btn-link">查看统计</a></td>
-    </tr>`).join('');
   } catch(e) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#dc2626;padding:32px">加载失败</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#dc2626;padding:32px">加载失败</td></tr>';
+    return;
   }
+
+  if (!statsList.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:32px">暂无统计数据</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = '';
+  statsList.forEach(s => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${s.name}</strong></td>
+      <td>${s.provider}</td>
+      <td>${typeof s.total_calls === 'number' ? s.total_calls.toLocaleString() : s.total_calls}</td>
+      <td>${typeof s.success_rate === 'number' ? s.success_rate + '%' : s.success_rate}</td>
+      <td>${typeof s.total_tokens === 'number' ? s.total_tokens.toLocaleString() : s.total_tokens}</td>
+      <td>${typeof s.avg_duration_ms === 'number' ? s.avg_duration_ms + ' ms' : s.avg_duration_ms}</td>
+      <td style="font-size:.82rem;color:var(--text-muted)">${s.last_used !== '—' ? s.last_used.slice(0,16).replace('T',' ') : '—'}</td>
+      <td><button class="expand-btn" data-cid="${s.config_id}">查看趋势 ▾</button></td>`;
+    tbody.appendChild(tr);
+
+    // 展开详情行
+    const detailTr = document.createElement('tr');
+    detailTr.className = 'detail-row';
+    detailTr.innerHTML = `<td colspan="8"><div class="detail-wrap" id="detail-${s.config_id}">
+      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:8px">近 7 天调用趋势</div>
+      <svg class="chart-svg" id="svg-${s.config_id}" viewBox="0 0 400 80" preserveAspectRatio="none"></svg>
+      <div class="chart-label" id="label-${s.config_id}"></div>
+    </div></td>`;
+    tbody.appendChild(detailTr);
+  });
+
+  // 展开按钮事件
+  tbody.querySelectorAll('.expand-btn').forEach(btn => {
+    btn.addEventListener('click', () => toggleDetail(btn.dataset.cid, btn));
+  });
+}
+
+async function toggleDetail(configId, btn) {
+  const wrap = document.getElementById('detail-' + configId);
+  if (wrap.classList.contains('open')) {
+    wrap.classList.remove('open');
+    btn.textContent = '查看趋势 ▾';
+    return;
+  }
+  wrap.classList.add('open');
+  btn.textContent = '收起 ▴';
+
+  // 加载趋势数据（仅管理员有此端点）
+  if (!isAdmin) return;
+  try {
+    const res = await fetch(`http://localhost:8000/admin/stats/${configId}/daily`, { headers: ADMIN_HEADERS });
+    const data = await res.json().catch(() => []);
+    drawChart(configId, data);
+  } catch(e) {}
+}
+
+function drawChart(configId, data) {
+  const svg   = document.getElementById('svg-' + configId);
+  const label = document.getElementById('label-' + configId);
+  const days  = getLast7Days();
+  const map   = Object.fromEntries(data.map(d => [d.day, d.count]));
+  const vals  = days.map(d => map[d] || 0);
+  const max   = Math.max(...vals, 1);
+  const W = 400, H = 80, pad = 10;
+  const xs = days.map((_, i) => pad + i * ((W - pad * 2) / 6));
+  const ys = vals.map(v => H - pad - (v / max) * (H - pad * 2));
+  const pts = xs.map((x, i) => `${x},${ys[i]}`).join(' ');
+  svg.innerHTML = `
+    <polyline points="${pts}" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round"/>
+    ${xs.map((x,i) => `<circle cx="${x}" cy="${ys[i]}" r="3" fill="var(--green)"/>`).join('')}`;
+  label.innerHTML = days.map(d => `<span>${d.slice(5)}</span>`).join('');
+}
+
+function getLast7Days() {
+  return Array.from({length: 7}, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - 6 + i);
+    return d.toISOString().slice(0, 10);
+  });
 }
 
 loadStats();
