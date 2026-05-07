@@ -189,11 +189,20 @@ import { requireLogin, getUser, authHeaders, logout } from '../assets/js/auth.js
 if (!requireLogin()) throw new Error('redirect');
 
 const user = getUser();
-document.getElementById('userBar').innerHTML = `
+const isEmbed = new URLSearchParams(location.search).get('embed') === '1';
+if (isEmbed) {
+  document.querySelector('.breadcrumb').style.display = 'none';
+  document.querySelector('.sidebar').style.display = 'none';
+  document.querySelector('.main').style.marginLeft = '0';
+  document.querySelector('.layout').style.paddingTop = '0';
+  document.body.style.paddingTop = '0';
+}
+
+document.getElementById('userBar').innerHTML = isEmbed ? '' : `
   <span class="username">${user.username}${user.role==='admin'?'（管理员）':''}</span>
   <button class="logout" id="logoutBtn">退出</button>`;
-document.getElementById('logoutBtn').addEventListener('click', () => logout());
-if (user.role === 'admin') { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; }
+if (!isEmbed) document.getElementById('logoutBtn')?.addEventListener('click', () => logout());
+if (user.role === 'admin' && !isEmbed) { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; }
 
 // ── ClickHouse 状态检查 ───────────────────────────────────
 fetch('http://localhost:8000/clickhouse/status', { headers: authHeaders() })
