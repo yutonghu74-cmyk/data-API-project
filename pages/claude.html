@@ -185,6 +185,12 @@
 
     let history = [];
     let attachments = [];
+    let activeConfigId = null;
+
+    fetch('http://localhost:8000/active-config')
+      .then(r => r.json())
+      .then(data => { activeConfigId = data.config_id; })
+      .catch(() => {});
 
     fetchModels()
       .then(models => {
@@ -318,9 +324,10 @@
       let accumulated = '';
 
       await streamChat({
-        messages: history,
-        model:    modelSelect.value,
-        system:   systemPrompt.value.trim(),
+        messages:  history,
+        model:     modelSelect.value,
+        system:    systemPrompt.value.trim(),
+        config_id: activeConfigId,
         onToken(chunk) {
           accumulated += chunk;
           assistantBubble.textContent = accumulated;
