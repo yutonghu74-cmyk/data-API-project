@@ -203,7 +203,7 @@ if (!isEmbed) {
     <span class="username">${user.username}${user.role==='admin'?'（管理员）':''}</span>
     <button class="logout" id="logoutBtn">退出</button>`;
   document.getElementById('logoutBtn').addEventListener('click', () => logout());
-  if (user.role === 'admin') { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; }
+  if (user.role === 'admin') { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; const k = document.getElementById('keysLink'); if(k) k.style.display='block'; }
 }
 
 // ── ClickHouse 状态检查 ───────────────────────────────────

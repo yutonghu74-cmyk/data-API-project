@@ -81,6 +81,7 @@ document.getElementById('userBar').innerHTML = `
   <span class="username">${me.username}（管理员）</span>
   <button class="logout" id="logoutBtn">退出</button>`;
 document.getElementById('logoutBtn').addEventListener('click', () => logout());
+const k = document.getElementById('keysLink'); if (k) k.style.display = 'block';
 
 const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
 let resetUserId = null;

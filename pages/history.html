@@ -114,7 +114,7 @@ if (!isEmbed) {
     <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
     <button class="logout" id="logoutBtn">退出</button>`;
   document.getElementById('logoutBtn').addEventListener('click', () => logout());
-  if (isAdmin) { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; }
+  if (isAdmin) { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; const k = document.getElementById('keysLink'); if(k) k.style.display='block'; }
 }
 
 let sessions = [];
