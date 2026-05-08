@@ -93,6 +93,10 @@
   <div class="modal">
     <h3>新增 API 申请</h3>
     <div class="form-group"><label>选择 API</label><select id="fConfig"></select></div>
+    <div class="form-group" id="fManagerGroup" style="display:none">
+      <label>审核人</label>
+      <input id="fManagerDisplay" readonly style="background:var(--surface);color:var(--text-muted);cursor:default">
+    </div>
     <div class="form-group"><label>需求项目</label><input id="fProject" placeholder="请输入项目名称"></div>
     <div class="form-group"><label>需求目的</label><textarea id="fPurpose" rows="2" placeholder="请描述使用目的"></textarea></div>
     <div class="form-group"><label>项目负责人</label><input id="fLead" placeholder="请输入负责人姓名"></div>
@@ -253,15 +257,32 @@ async function doReview(status) {
 }
 
 // ── 新增申请弹窗 ──────────────────────────────────────────
+let _configList = [];
+
 document.getElementById('applyBtn').addEventListener('click', async () => {
   const res = await fetch('http://localhost:8000/active-configs');
-  const list = await res.json().catch(() => []);
-  document.getElementById('fConfig').innerHTML =
+  _configList = await res.json().catch(() => []);
+  const sel = document.getElementById('fConfig');
+  sel.innerHTML =
     '<option value="">— 请选择 API —</option>' +
-    list.map(c => `<option value="${c.id}">${c.name}（${c.provider}）</option>`).join('');
+    _configList.map(c => `<option value="${c.id}">${c.name}（${c.provider}）</option>`).join('');
   ['fProject','fPurpose','fLead','fBudget','fSub'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('fManagerGroup').style.display = 'none';
+  document.getElementById('fManagerDisplay').value = '';
   document.getElementById('modalErr').textContent = '';
   document.getElementById('modalBg').classList.add('open');
+});
+
+document.getElementById('fConfig').addEventListener('change', () => {
+  const id = document.getElementById('fConfig').value;
+  const cfg = _configList.find(c => String(c.id) === id);
+  const group = document.getElementById('fManagerGroup');
+  if (cfg?.manager) {
+    document.getElementById('fManagerDisplay').value = cfg.manager;
+    group.style.display = 'block';
+  } else {
+    group.style.display = 'none';
+  }
 });
 
 document.getElementById('cancelBtn').addEventListener('click', () => document.getElementById('modalBg').classList.remove('open'));

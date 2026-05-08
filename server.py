@@ -250,9 +250,9 @@ def active_configs():
     try:
         with get_db() as conn:
             rows = conn.execute(
-                "SELECT id, name, provider FROM api_configs WHERE is_active=1 ORDER BY id DESC"
+                "SELECT id, name, provider, manager FROM api_configs WHERE is_active=1 ORDER BY id DESC"
             ).fetchall()
-        return [{"id": r["id"], "name": r["name"], "provider": r["provider"]} for r in rows]
+        return [{"id": r["id"], "name": r["name"], "provider": r["provider"], "manager": r["manager"] or ""} for r in rows]
     except Exception:
         return []
 
