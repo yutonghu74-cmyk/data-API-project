@@ -174,7 +174,7 @@ def get_db():
 def require_admin(x_admin_password: str = Header(default="")):
     import hmac
     if not hmac.compare_digest(x_admin_password, ADMIN_PASSWORD):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 _env_api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not _env_api_key:

@@ -172,7 +172,7 @@ async function loadStats() {
     // 展开详情行
     const detailTr = document.createElement('tr');
     detailTr.className = 'detail-row';
-    detailTr.innerHTML = `<td colspan="8"><div class="detail-wrap" id="detail-${s.config_id}">
+    detailTr.innerHTML = `<td colspan="10"><div class="detail-wrap" id="detail-${s.config_id}">
       <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:8px">近 7 天调用趋势</div>
       <svg class="chart-svg" id="svg-${s.config_id}" viewBox="0 0 400 80" preserveAspectRatio="none"></svg>
       <div class="chart-label" id="label-${s.config_id}"></div>
