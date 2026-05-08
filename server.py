@@ -78,6 +78,7 @@ def init_db():
             ("models",          "TEXT DEFAULT ''"),
             ("price_input",     "REAL DEFAULT 0"),   # 每千 input token 价格（元）
             ("price_output",    "REAL DEFAULT 0"),   # 每千 output token 价格（元）
+            ("manager",         "TEXT DEFAULT ''"),  # 该 API 的负责管理员
         ]:
             try:
                 conn.execute(f"ALTER TABLE api_configs ADD COLUMN {col} {definition}")
@@ -335,6 +336,7 @@ class ConfigIn(BaseModel):
     price_input: float = 0   # 元/千 input token
     price_output: float = 0  # 元/千 output token
     is_active: int = 1
+    manager: str = ""
 
 @app.post("/admin/login")
 def admin_login(x_admin_password: str = Header(default="")):
@@ -358,8 +360,8 @@ def create_config(body: ConfigIn, x_admin_password: str = Header(default="")):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO api_configs (name,base_url,api_key,provider,models,price_input,price_output,created_at,updated_at,is_active) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (body.name, body.base_url, body.api_key, body.provider, body.models, body.price_input, body.price_output, now, now, body.is_active)
+            "INSERT INTO api_configs (name,base_url,api_key,provider,models,price_input,price_output,manager,created_at,updated_at,is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (body.name, body.base_url, body.api_key, body.provider, body.models, body.price_input, body.price_output, body.manager, now, now, body.is_active)
         )
         conn.commit()
         row = conn.execute("SELECT * FROM api_configs WHERE id=?", (cur.lastrowid,)).fetchone()
@@ -374,13 +376,13 @@ def update_config(config_id: int, body: ConfigIn, x_admin_password: str = Header
     with get_db() as conn:
         if body.api_key and body.api_key != "(unchanged)":
             conn.execute(
-                "UPDATE api_configs SET name=?,base_url=?,api_key=?,provider=?,models=?,price_input=?,price_output=?,updated_at=?,is_active=? WHERE id=?",
-                (body.name, body.base_url, body.api_key, body.provider, body.models, body.price_input, body.price_output, now, body.is_active, config_id)
+                "UPDATE api_configs SET name=?,base_url=?,api_key=?,provider=?,models=?,price_input=?,price_output=?,manager=?,updated_at=?,is_active=? WHERE id=?",
+                (body.name, body.base_url, body.api_key, body.provider, body.models, body.price_input, body.price_output, body.manager, now, body.is_active, config_id)
             )
         else:
             conn.execute(
-                "UPDATE api_configs SET name=?,base_url=?,provider=?,models=?,price_input=?,price_output=?,updated_at=?,is_active=? WHERE id=?",
-                (body.name, body.base_url, body.provider, body.models, body.price_input, body.price_output, now, body.is_active, config_id)
+                "UPDATE api_configs SET name=?,base_url=?,provider=?,models=?,price_input=?,price_output=?,manager=?,updated_at=?,is_active=? WHERE id=?",
+                (body.name, body.base_url, body.provider, body.models, body.price_input, body.price_output, body.manager, now, body.is_active, config_id)
             )
         conn.commit()
         row = conn.execute("SELECT * FROM api_configs WHERE id=?", (config_id,)).fetchone()
@@ -584,7 +586,7 @@ def admin_list_requests(x_admin_password: str = Header(default="")):
     require_admin(x_admin_password)
     with get_db() as conn:
         rows = conn.execute("""
-            SELECT r.*, u.username, c.name as config_name, c.provider
+            SELECT r.*, u.username, c.name as config_name, c.provider, c.manager
             FROM api_requests r
             JOIN users u ON u.id = r.user_id
             JOIN api_configs c ON c.id = r.config_id

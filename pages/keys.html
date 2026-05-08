@@ -7,15 +7,6 @@
   <link rel="stylesheet" href="../assets/css/platform.css">
 </head>
 <body>
-<!-- 面包屑 -->
-<div class="breadcrumb">
-  <button class="sidebar-toggle" id="sidebarToggle">☰</button><span class="brand">数据平台</span>
-  <span class="sep">›</span>
-  <a href="#">三方API管理</a>
-  <span class="sep">›</span>
-  <span class="current">密钥管理</span>
-  <div class="breadcrumb-right" id="userBar"></div>
-</div>
 
 <div class="layout">
   <div class="sidebar">
@@ -34,6 +25,16 @@
   </div>
 
   <div class="main">
+<!-- 面包屑 -->
+<div class="breadcrumb">
+  <button class="sidebar-toggle" id="sidebarToggle">☰</button><span class="brand">数据平台</span>
+  <span class="sep">›</span>
+  <a href="#">三方API管理</a>
+  <span class="sep">›</span>
+  <span class="current">密钥管理</span>
+  <div class="breadcrumb-right" id="userBar"></div>
+</div>
+
     <!-- 管理员：显示完整密钥管理 -->
     <div id="adminSection" style="display:none">
       <div class="toolbar">
@@ -44,7 +45,7 @@
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>名称</th><th>供应商</th><th>密钥</th><th>可用模型</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+              <tr><th>名称</th><th>供应商</th><th>密钥</th><th>可用模型</th><th>管理员</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
             </thead>
             <tbody id="adminTbody"></tbody>
           </table>
@@ -131,6 +132,7 @@
   <div class="modal">
     <h3 id="modalTitle">新增配置</h3>
     <div class="form-group"><label>名称</label><input id="fName" placeholder="如 Claude API"></div>
+    <div class="form-group"><label>管理员</label><input id="fManager" placeholder="负责管理员姓名"></div>
     <div class="form-group"><label>供应商</label><input id="fProvider" placeholder="如 anthropic"></div>
     <div class="form-group"><label>Base URL</label><input id="fBaseUrl" placeholder="https://api.anthropic.com/v1"></div>
     <div class="form-group"><label>API Key</label><input id="fApiKey" type="password" placeholder="sk-ant-...（编辑时留空则不修改）"></div>
@@ -191,7 +193,7 @@ async function loadAdminConfigs() {
   allConfigs = await res.json().catch(() => []);
   const tbody = document.getElementById('adminTbody');
   if (!allConfigs.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px">暂无配置</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:32px">暂无配置</td></tr>';
     return;
   }
   tbody.innerHTML = '';
@@ -203,6 +205,7 @@ async function loadAdminConfigs() {
       <td>${c.provider}</td>
       <td><code style="font-size:.82rem">${c.api_key}</code></td>
       <td style="font-size:.82rem;color:var(--text-muted)">${models}</td>
+      <td>${c.manager || '—'}</td>
       <td><span class="badge ${c.is_active ? 'badge-green' : 'badge-gray'}">${c.is_active ? '启用' : '禁用'}</span></td>
       <td>${c.created_at.slice(0,10)}</td>
       <td style="white-space:nowrap">
@@ -320,7 +323,7 @@ async function confirmSubDel(id) {
 document.getElementById('addConfigBtn').addEventListener('click', () => {
   editingId = null;
   document.getElementById('modalTitle').textContent = '新增配置';
-  ['fName','fProvider','fBaseUrl','fApiKey','fModels','fPriceInput','fPriceOutput'].forEach(id => document.getElementById(id).value = '');
+  ['fName','fManager','fProvider','fBaseUrl','fApiKey','fModels','fPriceInput','fPriceOutput'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('modalError').textContent = '';
   document.getElementById('modalBg').classList.add('open');
 });
@@ -331,6 +334,7 @@ function openEdit(c) {
   editingId = c.id;
   document.getElementById('modalTitle').textContent = '编辑配置';
   document.getElementById('fName').value     = c.name;
+  document.getElementById('fManager').value  = c.manager || '';
   document.getElementById('fProvider').value = c.provider;
   document.getElementById('fBaseUrl').value  = c.base_url;
   document.getElementById('fApiKey').value   = '';
@@ -352,6 +356,7 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
   if (!editingId && !api_key) { err.textContent = 'API Key 不能为空'; return; }
   const body = {
     name, provider, base_url, api_key: api_key || '(unchanged)', models, is_active: 1,
+    manager: document.getElementById('fManager').value.trim(),
     price_input:  parseFloat(document.getElementById('fPriceInput').value)  || 0,
     price_output: parseFloat(document.getElementById('fPriceOutput').value) || 0,
   };
