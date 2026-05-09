@@ -22,20 +22,35 @@ body {
   min-height: 100vh;
 }
 
-/* ── 面包屑 ──────────────────────────────────── */
-.breadcrumb {
+/* ── 顶部通栏（品牌 + 用户信息） ────────────── */
+.top-bar {
   height: var(--header-h);
   background: #fff;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  padding: 0 24px;
-  gap: 6px;
-  font-size: .85rem;
-  color: var(--text-muted);
+  padding: 0 20px;
+  gap: 10px;
   position: fixed;
   top: 0; left: 0; right: 0;
   z-index: 100;
+}
+.top-bar .brand {
+  font-weight: 700;
+  font-size: .95rem;
+  color: var(--text);
+}
+
+/* ── 面包屑（主内容区左上角，仅导航路径） ───── */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  padding: 0 0 12px;
+  gap: 6px;
+  font-size: .85rem;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
 }
 .breadcrumb .brand {
   font-weight: 600;
@@ -63,6 +78,10 @@ body {
   padding: 0;
 }
 .breadcrumb-right .logout:hover { color: var(--green-hover); text-decoration: underline; }
+
+/* ── 管理员专属侧边栏链接 ─────────────────────── */
+.sidebar-admin { display: none; }
+body.is-admin  .sidebar-admin { display: block; }
 
 /* ── 布局 ────────────────────────────────────── */
 .layout {
@@ -108,7 +127,7 @@ body {
   display: block;
   padding: 7px 16px 7px 28px;
   font-size: .85rem;
-  color: var(--green);
+  color: var(--text);
   text-decoration: none;
   transition: background .15s;
 }
@@ -124,7 +143,7 @@ body {
 .main {
   margin-left: var(--sidebar-w);
   flex: 1;
-  padding: 28px 32px;
+  padding: 20px 32px 28px;
   min-width: 0;
 }
 .page-title { display: none; }
@@ -211,6 +230,15 @@ input, textarea, select {
   font-family: var(--font);
 }
 input:focus, textarea:focus, select:focus { border-color: var(--green); }
+
+/* select 处于占位状态时，提示语变浅、字号与 label 对齐 */
+select[data-ph="1"] {
+  color: var(--text-muted);
+  font-size: .82rem;
+}
+select option[value=""] {
+  color: var(--text-muted);
+}
 
 /* ── 徽章 ────────────────────────────────────── */
 .badge {

@@ -7,13 +7,12 @@
   <link rel="stylesheet" href="../assets/css/platform.css">
 </head>
 <body>
-<!-- 面包屑 -->
-<div class="breadcrumb">
-  <button class="sidebar-toggle" id="sidebarToggle">☰</button><span class="brand">数据平台</span>
-  <span class="sep">›</span>
-  <a href="#">三方API管理</a>
-  <span class="sep">›</span>
-  <span class="current">用户管理</span>
+
+<!-- 顶部固定导航栏 -->
+<div class="top-bar">
+  <button class="sidebar-toggle" id="sidebarToggle">☰</button>
+  <span class="brand">数据平台</span>
+  <div style="flex:1"></div>
   <div class="breadcrumb-right" id="userBar"></div>
 </div>
 
@@ -26,7 +25,7 @@
       <div class="sidebar-children">
         <a href="claude.html"  class="sidebar-item">API调用</a>
         <a href="apply.html"   class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item" id="keysLink" style="display:none">密钥管理</a>
+        <a href="keys.html"    class="sidebar-item sidebar-admin" id="keysLink">密钥管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
         <a href="users.html"   class="sidebar-item active">用户管理</a>
       </div>
@@ -34,6 +33,12 @@
   </div>
 
   <div class="main">
+<div class="breadcrumb">
+  <a href="#">三方API管理</a>
+  <span class="sep">›</span>
+  <span class="current">用户管理</span>
+</div>
+
     <div class="toolbar">
       <span class="page-title" style="margin:0">用户管理</span>
     </div>
@@ -97,7 +102,7 @@ async function loadUsers() {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>
-        <strong>${u.username}</strong>
+        ${u.username}
         ${isMe ? '<span style="font-size:.75rem;color:var(--text-muted);margin-left:6px">（当前账号）</span>' : ''}
       </td>
       <td>

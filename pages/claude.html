@@ -8,7 +8,7 @@
   <style>
     .sub-tabs {
       display: flex; border-bottom: 1px solid var(--border);
-      margin-bottom: 0; background: #fff;
+      margin-top: -10px; margin-bottom: 0; background: #fff;
     }
     .sub-tab {
       padding: 10px 22px; font-size: .9rem; cursor: pointer;
@@ -20,8 +20,8 @@
     .sub-tab.active { color: var(--green); border-bottom-color: var(--green); font-weight: 500; }
     .sub-panel { display: none; }
     .sub-panel.active { display: block; }
-    .chat-wrap { display: flex; flex-direction: column; height: calc(100vh - var(--header-h) - 56px); }
-    .config-bar { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    .chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 176px); }
+    .config-bar { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px; margin-top: 20px; }
     .messages {
       flex: 1; overflow-y: auto;
       background: var(--surface); border: 1px solid var(--border);
@@ -76,13 +76,12 @@
   </style>
 </head>
 <body>
-<!-- 面包屑 -->
-<div class="breadcrumb">
-  <button class="sidebar-toggle" id="sidebarToggle">☰</button><span class="brand">数据平台</span>
-  <span class="sep">›</span>
-  <a href="#">三方API管理</a>
-  <span class="sep">›</span>
-  <span class="current">API调用</span>
+
+<!-- 顶部固定导航栏 -->
+<div class="top-bar">
+  <button class="sidebar-toggle" id="sidebarToggle">☰</button>
+  <span class="brand">数据平台</span>
+  <div style="flex:1"></div>
   <div class="breadcrumb-right" id="userBar"></div>
 </div>
 
@@ -96,19 +95,25 @@
       <div class="sidebar-children">
         <a href="claude.html"  class="sidebar-item active">API调用</a>
         <a href="apply.html"   class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item" id="keysLink" style="display:none">密钥管理</a>
+        <a href="keys.html"    class="sidebar-item sidebar-admin" id="keysLink">密钥管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
-        <a href="users.html"   class="sidebar-item" id="usersLink" style="display:none">用户管理</a>
+        <a href="users.html"   class="sidebar-item sidebar-admin" id="usersLink">用户管理</a>
       </div>
     </div>
   </div>
 
   <!-- 主内容 -->
   <div class="main" style="padding-bottom:0">
+<div class="breadcrumb">
+  <a href="#">三方API管理</a>
+  <span class="sep">›</span>
+  <span class="current">API调用</span>
+</div>
+
 
     <!-- 子界面 Tab -->
     <div class="sub-tabs">
-      <button class="sub-tab active" data-panel="chat">API调用</button>
+      <button class="sub-tab active" data-panel="chat">在线试用</button>
       <button class="sub-tab" data-panel="batch">批量处理</button>
       <button class="sub-tab" data-panel="history">历史记录</button>
     </div>
@@ -118,16 +123,16 @@
       <div class="chat-wrap">
         <div class="config-bar">
           <div class="form-group" style="margin:0">
-            <label>API 配置</label>
-            <select id="configSelect"><option value="">— 暂无可用 API —</option></select>
+            <label>供应商</label>
+            <select id="providerSelect"><option value="">— 请选择 —</option></select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>API名称</label>
+            <select id="configSelect"><option value="">— 请选择 —</option></select>
           </div>
           <div class="form-group" style="margin:0">
             <label>模型</label>
-            <select id="modelSelect"></select>
-          </div>
-          <div class="form-group" style="margin:0">
-            <label>System Prompt</label>
-            <input id="systemPrompt" placeholder="可选：设置助手角色…">
+            <select id="modelSelect"><option value="">— 请选择 —</option></select>
           </div>
         </div>
         <div class="messages" id="messages">
@@ -192,17 +197,17 @@ document.querySelectorAll('.sub-tab').forEach(tab => {
   });
 });
 
-const messagesEl    = document.getElementById('messages');
-const userInput     = document.getElementById('userInput');
-const sendBtn       = document.getElementById('sendBtn');
-const clearBtn      = document.getElementById('clearBtn');
-const modelSelect   = document.getElementById('modelSelect');
-const systemPrompt  = document.getElementById('systemPrompt');
-const configSelect  = document.getElementById('configSelect');
+const messagesEl     = document.getElementById('messages');
+const userInput      = document.getElementById('userInput');
+const sendBtn        = document.getElementById('sendBtn');
+const clearBtn       = document.getElementById('clearBtn');
+const providerSelect = document.getElementById('providerSelect');
+const configSelect   = document.getElementById('configSelect');
+const modelSelect    = document.getElementById('modelSelect');
 const attachmentsRow = document.getElementById('attachmentsRow');
-const fileInput     = document.getElementById('fileInput');
-const attachBtn     = document.getElementById('attachBtn');
-const savePath      = document.getElementById('savePath');
+const fileInput      = document.getElementById('fileInput');
+const attachBtn      = document.getElementById('attachBtn');
+const savePath       = document.getElementById('savePath');
 
 const ACCEPTED_TYPES = {
   'image/jpeg':'image','image/png':'image','image/gif':'image','image/webp':'image',
@@ -240,14 +245,16 @@ async function saveMessage(role, content) {
   }).catch(() => {});
 }
 
-// 加载已授权的 API 配置
+// 已授权配置全量缓存
+let _approvedList = [];
+
 async function loadApprovedConfigs() {
   try {
     const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
-    const list = await res.json();
-    configSelect.innerHTML = '';
-    if (!list.length) {
-      configSelect.innerHTML = '<option value="">— 暂无可用 API，请先申请 —</option>';
+    _approvedList = await res.json();
+    if (!_approvedList.length) {
+      providerSelect.innerHTML = '<option value="">— 暂无可用 API，请先申请 —</option>';
+      configSelect.innerHTML   = '<option value="">—</option>';
       setInputEnabled(false);
       messagesEl.innerHTML = `<div class="no-api-hint">
         <p>暂无可用 API</p>
@@ -255,34 +262,40 @@ async function loadApprovedConfigs() {
       </div>`;
       return;
     }
-    list.forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = c.id; opt.textContent = c.name;
-      configSelect.appendChild(opt);
-    });
-    // 自动加载第一个配置的模型
-    if (list.length > 0) loadModelsForConfig(list[0].id);
+    // 填充供应商（去重）
+    const providers = [...new Set(_approvedList.map(c => c.provider))];
+    providerSelect.innerHTML = '<option value="">— 请选择 —</option>' +
+      providers.map(p => `<option value="${p}">${p}</option>`).join('');
+    configSelect.innerHTML = '<option value="">— 请选择 —</option>';
   } catch(e) { console.error(e); }
 }
 
-// 根据选中的 API 配置加载对应模型列表
+// 供应商变化 → 筛选 API名称
+providerSelect.addEventListener('change', () => {
+  const p = providerSelect.value;
+  const filtered = _approvedList.filter(c => c.provider === p);
+  configSelect.innerHTML = filtered.length
+    ? '<option value="">— 请选择 —</option>' + filtered.map(c => `<option value="${c.id}">${c.name}</option>`).join('')
+    : '<option value="">— 暂无可用 —</option>';
+  modelSelect.innerHTML = '<option value="">— 请选择 —</option>';
+});
+
+// API名称变化 → 加载模型
+configSelect.addEventListener('change', () => loadModelsForConfig(configSelect.value));
+
 async function loadModelsForConfig(configId) {
+  if (!configId) { modelSelect.innerHTML = '<option value="">— 请选择 —</option>'; return; }
   modelSelect.innerHTML = '<option value="">— 加载中 —</option>';
-  if (!configId) { modelSelect.innerHTML = '<option value="">— 请先选择 API 配置 —</option>'; return; }
   try {
-    const res = await fetch(`http://localhost:8000/configs/${configId}/models`);
+    const res  = await fetch(`http://localhost:8000/configs/${configId}/models`);
     const data = await res.json();
-    if (data.models && data.models.length) {
-      modelSelect.innerHTML = data.models.map(m => `<option value="${m}">${m}</option>`).join('');
-    } else {
-      modelSelect.innerHTML = '<option value="">— 该配置暂无可用模型 —</option>';
-    }
+    modelSelect.innerHTML = data.models?.length
+      ? data.models.map(m => `<option value="${m}">${m}</option>`).join('')
+      : '<option value="">— 该配置暂无可用模型 —</option>';
   } catch(e) {
     modelSelect.innerHTML = '<option value="">— 加载失败 —</option>';
   }
 }
-
-configSelect.addEventListener('change', () => loadModelsForConfig(configSelect.value));
 
 loadApprovedConfigs();
 
@@ -351,7 +364,9 @@ function setInputEnabled(enabled) {
 async function send() {
   const text = userInput.value.trim();
   if (!text && attachments.length === 0) return;
-  if (!configSelect.value) { addError('请先在管理员面板配置 API Key，或等待申请审核通过'); return; }
+  if (!providerSelect.value) { addError('请先选择供应商'); return; }
+  if (!configSelect.value)  { addError('请选择 API 名称'); return; }
+  if (!modelSelect.value)   { addError('请选择模型'); return; }
 
   userInput.value = '';
   let content;
@@ -386,7 +401,7 @@ async function send() {
   await streamChat({
     messages:   history,
     model:      modelSelect.value,
-    system:     systemPrompt.value.trim(),
+    system:     '',
     config_id:  parseInt(configSelect.value),
     user_token: (await import('../assets/js/auth.js')).getToken(),
     onToken(chunk) {

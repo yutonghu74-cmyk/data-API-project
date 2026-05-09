@@ -9,6 +9,7 @@
   <!-- SheetJS for Excel parsing -->
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
   <style>
+    html.embed-mode .top-bar,
     html.embed-mode .breadcrumb,
     html.embed-mode .sidebar { display: none !important; }
     html.embed-mode .layout { padding-top: 0 !important; }
@@ -54,12 +55,12 @@
   </style>
 </head>
 <body>
-<div class="breadcrumb">
-  <button class="sidebar-toggle" id="sidebarToggle">☰</button><span class="brand">数据平台</span>
-  <span class="sep">›</span>
-  <a href="#">三方API管理</a>
-  <span class="sep">›</span>
-  <span class="current">批量处理</span>
+
+<!-- 顶部固定导航栏 -->
+<div class="top-bar">
+  <button class="sidebar-toggle" id="sidebarToggle">☰</button>
+  <span class="brand">数据平台</span>
+  <div style="flex:1"></div>
   <div class="breadcrumb-right" id="userBar"></div>
 </div>
 
@@ -72,20 +73,28 @@
       <div class="sidebar-children">
         <a href="claude.html"  class="sidebar-item">API调用</a>
         <a href="apply.html"   class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item" id="keysLink" style="display:none">密钥管理</a>
+        <a href="keys.html"    class="sidebar-item sidebar-admin" id="keysLink">密钥管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
-        <a href="users.html"   class="sidebar-item" id="usersLink" style="display:none">用户管理</a>
+        <a href="users.html"   class="sidebar-item sidebar-admin" id="usersLink">用户管理</a>
       </div>
     </div>
   </div>
 
   <div class="main">
+    <div class="breadcrumb">
+      <a href="#">三方API管理</a>
+      <span class="sep">›</span>
+      <span class="current">批量处理</span>
+    </div>
     <div class="toolbar">
       <span class="page-title" style="margin:0">批量处理</span>
-      <span class="ch-status" id="chStatus">
-        <span class="ch-dot unk" id="chDot"></span>
-        <span id="chText">检查 ClickHouse...</span>
-      </span>
+      <details class="ch-status" id="chStatus">
+        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px">
+          <span class="ch-dot unk" id="chDot"></span>
+          <span id="chText">检查 ClickHouse...</span>
+        </summary>
+        <pre id="chDetail" style="margin:6px 0 0;font-size:.72rem;color:#6b7280;white-space:pre-wrap;max-width:480px"></pre>
+      </details>
     </div>
 
     <!-- 步骤导航 -->
@@ -126,7 +135,7 @@
     <!-- Step 3: 配置任务 -->
     <div class="step-panel" id="step-3">
       <div class="card">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
           <div class="form-group" style="margin:0">
             <label>任务名称</label>
             <input id="taskName" placeholder="如：产品评论分析">
@@ -135,13 +144,19 @@
             <label>输出 Label</label>
             <input id="taskLabel" placeholder="如：sentiment_v1">
           </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
           <div class="form-group" style="margin:0">
-            <label>API 配置</label>
-            <select id="configSelect"><option value="">— 加载中 —</option></select>
+            <label>供应商</label>
+            <select id="providerSelect"><option value="">— 请选择 —</option></select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>API名称</label>
+            <select id="configSelect"><option value="">— 请选择 —</option></select>
           </div>
           <div class="form-group" style="margin:0">
             <label>模型</label>
-            <select id="modelSelect"><option value="">— 请先选择 API —</option></select>
+            <select id="modelSelect"><option value="">— 请选择 —</option></select>
           </div>
         </div>
         <div class="form-group" style="margin-top:16px">
@@ -151,10 +166,6 @@
           <div class="template-help" id="templateHelp">
             可用字段：<span id="availableFields">—</span>
           </div>
-        </div>
-        <div class="form-group">
-          <label>System Prompt <span style="color:var(--text-muted);font-weight:400">（可选）</span></label>
-          <input id="systemPrompt" placeholder="如：你是一个专业的数据分析师">
         </div>
         <div style="margin-top:16px;display:flex;gap:10px">
           <button class="btn btn-secondary" id="prevStep3">← 上一步</button>
@@ -211,9 +222,12 @@ fetch('http://localhost:8000/clickhouse/status', { headers: authHeaders() })
   .then(r => r.json())
   .then(d => {
     document.getElementById('chDot').className = `ch-dot ${d.connected ? 'ok' : 'err'}`;
-    document.getElementById('chText').textContent = d.connected
-      ? 'ClickHouse 已连接'
-      : `ClickHouse 未连接：${d.error || ''}`;
+    document.getElementById('chText').textContent = d.connected ? 'ClickHouse 已连接' : 'ClickHouse 未连接';
+    if (!d.connected && d.error) {
+      document.getElementById('chDetail').textContent = d.error;
+    } else {
+      document.getElementById('chStatus').removeAttribute('open');
+    }
   }).catch(() => {
     document.getElementById('chText').textContent = 'ClickHouse 状态未知';
   });
@@ -349,17 +363,27 @@ document.getElementById('nextStep2').addEventListener('click', () => {
 });
 
 // ── Step 3: 配置任务 ──────────────────────────────────────
+let _batchConfigs = [];
+
 async function loadConfigs() {
   const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
-  const list = await res.json().catch(() => []);
-  const sel = document.getElementById('configSelect');
-  sel.innerHTML = '<option value="">— 请选择 API —</option>' +
-    list.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-  if (list.length) {
-    sel.value = list[0].id;
-    loadModels(list[0].id);
-  }
+  _batchConfigs = await res.json().catch(() => []);
+  const providers = [...new Set(_batchConfigs.map(c => c.provider))];
+  const pSel = document.getElementById('providerSelect');
+  pSel.innerHTML = '<option value="">— 请选择 —</option>' +
+    providers.map(p => `<option value="${p}">${p}</option>`).join('');
+  document.getElementById('configSelect').innerHTML = '<option value="">— 请选择 —</option>';
+  document.getElementById('modelSelect').innerHTML  = '<option value="">— 请选择 —</option>';
 }
+
+document.getElementById('providerSelect').addEventListener('change', e => {
+  const filtered = _batchConfigs.filter(c => c.provider === e.target.value);
+  const cSel = document.getElementById('configSelect');
+  cSel.innerHTML = filtered.length
+    ? '<option value="">— 请选择 —</option>' + filtered.map(c => `<option value="${c.id}">${c.name}</option>`).join('')
+    : '<option value="">— 暂无可用 —</option>';
+  document.getElementById('modelSelect').innerHTML = '<option value="">— 请选择 —</option>';
+});
 
 document.getElementById('configSelect').addEventListener('change', e => loadModels(e.target.value));
 
@@ -381,7 +405,7 @@ async function startBatch() {
   const taskName = document.getElementById('taskName').value.trim() || '批跑任务';
   const label    = document.getElementById('taskLabel').value.trim();
   const template = document.getElementById('promptTemplate').value.trim();
-  const system   = document.getElementById('systemPrompt').value.trim();
+  const system   = '';
   const configId = document.getElementById('configSelect').value;
   const model    = document.getElementById('modelSelect').value;
 

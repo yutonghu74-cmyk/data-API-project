@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="../assets/css/platform.css">
   <script>if(new URLSearchParams(location.search).get('embed')==='1')document.documentElement.classList.add('embed-mode');</script>
   <style>
+    html.embed-mode .top-bar,
     html.embed-mode .breadcrumb,
     html.embed-mode .sidebar { display: none !important; }
     html.embed-mode .layout { padding-top: 0 !important; }
@@ -44,12 +45,12 @@
   </style>
 </head>
 <body>
-<div class="breadcrumb">
-  <button class="sidebar-toggle" id="sidebarToggle">☰</button><span class="brand">数据平台</span>
-  <span class="sep">›</span>
-  <a href="#">三方API管理</a>
-  <span class="sep">›</span>
-  <span class="current">历史记录</span>
+
+<!-- 顶部固定导航栏 -->
+<div class="top-bar">
+  <button class="sidebar-toggle" id="sidebarToggle">☰</button>
+  <span class="brand">数据平台</span>
+  <div style="flex:1"></div>
   <div class="breadcrumb-right" id="userBar"></div>
 </div>
 
@@ -62,14 +63,19 @@
       <div class="sidebar-children">
         <a href="claude.html"  class="sidebar-item">API调用</a>
         <a href="apply.html"   class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item" id="keysLink" style="display:none">密钥管理</a>
+        <a href="keys.html"    class="sidebar-item sidebar-admin" id="keysLink">密钥管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
-        <a href="users.html"   class="sidebar-item" id="usersLink" style="display:none">用户管理</a>
+        <a href="users.html"   class="sidebar-item sidebar-admin" id="usersLink">用户管理</a>
       </div>
     </div>
   </div>
 
   <div class="main">
+    <div class="breadcrumb">
+      <a href="#">三方API管理</a>
+      <span class="sep">›</span>
+      <span class="current">历史记录</span>
+    </div>
     <div class="toolbar">
       <span class="page-title" style="margin:0">历史记录</span>
     </div>

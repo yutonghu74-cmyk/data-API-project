@@ -143,11 +143,15 @@ def init_db():
                 created_at        TEXT NOT NULL
             )
         """)
-        # api_requests 兼容添加 sub_account_id 字段
-        try:
-            conn.execute("ALTER TABLE api_requests ADD COLUMN sub_account_id INTEGER DEFAULT NULL")
-        except Exception:
-            pass
+        # api_requests 兼容添加字段
+        for col, definition in [
+            ("sub_account_id", "INTEGER DEFAULT NULL"),
+            ("cc_person",      "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE api_requests ADD COLUMN {col} {definition}")
+            except Exception:
+                pass
         conn.commit()
         # 初始化默认管理员账号（仅首次，已存在则跳过）
         now = datetime.now(timezone.utc).isoformat()
@@ -404,14 +408,15 @@ def delete_config(config_id: int, x_admin_password: str = Header(default="")):
 # ── Admin: stats ───────────────────────────────────────────
 
 @app.get("/admin/stats")
-def list_stats(x_admin_password: str = Header(default="")):
+def list_stats(days: int | None = None, x_admin_password: str = Header(default="")):
     require_admin(x_admin_password)
+    date_clause = f"AND called_at >= date('now','-{int(days)} days')" if days else ""
     with get_db() as conn:
-        configs = conn.execute("SELECT id, name, provider FROM api_configs").fetchall()
+        configs = conn.execute("SELECT id, name, provider, created_at FROM api_configs").fetchall()
         result = []
         for cfg in configs:
             cid = cfg["id"]
-            row = conn.execute("""
+            row = conn.execute(f"""
                 SELECT COUNT(*) as total,
                        SUM(success) as ok,
                        SUM(input_tokens+output_tokens) as tokens,
@@ -420,7 +425,7 @@ def list_stats(x_admin_password: str = Header(default="")):
                        ROUND(SUM(cost),4) as total_cost,
                        AVG(duration_ms) as avg_ms,
                        MAX(called_at) as last_used
-                FROM usage_stats WHERE config_id=?
+                FROM usage_stats WHERE config_id=? {date_clause}
             """, (cid,)).fetchone()
             total = row["total"] or 0
             ok    = row["ok"] or 0
@@ -428,6 +433,7 @@ def list_stats(x_admin_password: str = Header(default="")):
                 "config_id":       cid,
                 "name":            cfg["name"],
                 "provider":        cfg["provider"],
+                "created_at":      cfg["created_at"],
                 "total_calls":     total,
                 "success_rate":    round(ok / total * 100, 1) if total else 0,
                 "input_tokens":    row["in_tokens"] or 0,
@@ -462,16 +468,17 @@ def stats_by_user(x_admin_password: str = Header(default="")):
     return [dict(r) for r in rows]
 
 @app.get("/admin/stats/{config_id}/daily")
-def daily_stats(config_id: int, x_admin_password: str = Header(default="")):
+def daily_stats(config_id: int, days: int = 7, x_admin_password: str = Header(default="")):
     require_admin(x_admin_password)
+    n = max(1, int(days))
     with get_db() as conn:
         rows = conn.execute("""
             SELECT substr(called_at,1,10) as day, COUNT(*) as cnt
             FROM usage_stats
             WHERE config_id=?
-              AND called_at >= date('now','-6 days')
+              AND called_at >= date('now',? || ' days')
             GROUP BY day ORDER BY day
-        """, (config_id,)).fetchall()
+        """, (config_id, f"-{n}")).fetchall()
     return [{"day": r["day"], "count": r["cnt"]} for r in rows]
 
 # ── Auth ──────────────────────────────────────────────────
@@ -548,6 +555,7 @@ class RequestIn(BaseModel):
     lead: str
     budget: str
     sub_accounts: str = ""
+    cc_person: str = ""
 
 @app.post("/api-requests")
 def create_request(body: RequestIn, x_token: str = Header(default="")):
@@ -555,8 +563,8 @@ def create_request(body: RequestIn, x_token: str = Header(default="")):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO api_requests (user_id,config_id,project_name,purpose,lead,budget,sub_accounts,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (user["id"], body.config_id, body.project_name, body.purpose, body.lead, body.budget, body.sub_accounts, now, now)
+            "INSERT INTO api_requests (user_id,config_id,project_name,purpose,lead,budget,sub_accounts,cc_person,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (user["id"], body.config_id, body.project_name, body.purpose, body.lead, body.budget, body.sub_accounts, body.cc_person, now, now)
         )
         conn.commit()
     return {"id": cur.lastrowid}
@@ -566,7 +574,7 @@ def my_requests(x_token: str = Header(default="")):
     user = get_current_user(x_token)
     with get_db() as conn:
         rows = conn.execute("""
-            SELECT r.*, c.name as config_name, c.provider, c.base_url
+            SELECT r.*, c.name as config_name, c.provider, c.base_url, c.manager
             FROM api_requests r
             JOIN api_configs c ON c.id = r.config_id
             WHERE r.user_id=?
