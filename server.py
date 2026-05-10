@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Header
+import asyncio
+from fastapi import FastAPI, HTTPException, Header, UploadFile, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -143,6 +144,39 @@ def init_db():
                 created_at        TEXT NOT NULL
             )
         """)
+        # chat_sessions 兼容添加 pinned 字段
+        try:
+            conn.execute("ALTER TABLE chat_sessions ADD COLUMN pinned INTEGER DEFAULT 0")
+            conn.commit()
+        except Exception:
+            pass
+        # batch_jobs / batch_job_rows（SQLite 批量历史，不依赖 ClickHouse）
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS batch_jobs (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER REFERENCES users(id),
+                task_name  TEXT NOT NULL,
+                model      TEXT DEFAULT '',
+                config_id  INTEGER,
+                label      TEXT DEFAULT '',
+                row_count  INTEGER DEFAULT 0,
+                done_count INTEGER DEFAULT 0,
+                fail_count INTEGER DEFAULT 0,
+                status     TEXT DEFAULT 'running',
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS batch_job_rows (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id      INTEGER REFERENCES batch_jobs(id),
+                row_index   INTEGER NOT NULL,
+                input_json  TEXT NOT NULL,
+                output_text TEXT DEFAULT '',
+                success     INTEGER DEFAULT 1,
+                error_msg   TEXT DEFAULT ''
+            )
+        """)
         # api_requests 兼容添加字段
         for col, definition in [
             ("sub_account_id", "INTEGER DEFAULT NULL"),
@@ -186,7 +220,7 @@ if not _env_api_key:
     print("WARNING: ANTHROPIC_API_KEY not set. Will use key from admin database.")
 
 def get_active_anthropic_key() -> str | None:
-    """从 api_configs 表读取 provider=anthropic 且 is_active=1 的最新密钥。"""
+    """从 api_configs 表读取 provider=anthropic 且 is_active=1 的最新密钥（兜底用）。"""
     try:
         with get_db() as conn:
             row = conn.execute(
@@ -195,6 +229,48 @@ def get_active_anthropic_key() -> str | None:
         return row["api_key"] if row else None
     except Exception:
         return None
+
+def get_config_credentials(config_id: int | None) -> tuple[str | None, str | None, str | None]:
+    """返回 (api_key, base_url, provider)。优先用指定 config_id，否则兜底找 anthropic provider。"""
+    if config_id:
+        try:
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT api_key, base_url, provider FROM api_configs WHERE id=? AND is_active=1",
+                    (config_id,)
+                ).fetchone()
+            if row:
+                return row["api_key"], row["base_url"], row["provider"]
+        except Exception:
+            pass
+    return get_active_anthropic_key() or _env_api_key, None, "anthropic"
+
+def _friendly_error(e: Exception) -> str:
+    """把 API 原始异常转成简洁的中文提示。"""
+    raw = str(e)
+    import re as _re
+    # 提取 message 字段
+    m = _re.search(r"'message':\s*'([^']+)'", raw)
+    if not m:
+        m = _re.search(r'"message":\s*"([^"]+)"', raw)
+    if m:
+        msg = m.group(1)
+        # 常见错误的友好提示
+        if 'model_not_found' in raw or 'No available channel' in raw:
+            return f"模型不可用：{msg}\n请检查密钥管理中的模型名称是否正确。"
+        if 'invalid api key' in raw.lower() or 'authentication' in raw.lower():
+            return f"API Key 无效或已过期，请在密钥管理中重新配置。"
+        if 'rate limit' in raw.lower():
+            return f"请求频率超限，请稍后再试。"
+        if 'context_length' in raw.lower() or 'too long' in raw.lower():
+            return f"消息过长，请清空对话后重试。"
+        return msg  # 返回提取到的 message，已比原始报错简洁
+    # 提取状态码
+    m2 = _re.search(r'Error code: (\d+)', raw)
+    if m2:
+        code = m2.group(1)
+        return f"API 返回错误（HTTP {code}），请检查配置是否正确。"
+    return "请求失败，请检查 API 配置后重试。"
 
 app = FastAPI()
 
@@ -239,6 +315,45 @@ def health():
 def models():
     return {"models": MODELS}
 
+@app.get("/admin/configs/{config_id}/fetch-models")
+def fetch_models_from_provider(config_id: int, x_admin_password: str = Header(default="")):
+    """从供应商 /v1/models 接口拉取真实可用的模型列表。"""
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT api_key, base_url, provider FROM api_configs WHERE id=?", (config_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="配置不存在")
+
+    base_url = (row["base_url"] or "").rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url = base_url + "/v1"
+
+    try:
+        import httpx
+        resp = httpx.get(
+            f"{base_url}/models",
+            headers={"Authorization": f"Bearer {row['api_key']}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        models = []
+        # OpenAI 格式: {"data": [{"id": "..."}]}
+        if isinstance(data, dict) and "data" in data:
+            models = [m["id"] for m in data["data"] if isinstance(m, dict) and "id" in m]
+        # {"models": [...]}
+        elif isinstance(data, dict) and "models" in data:
+            raw = data["models"]
+            models = [m["id"] if isinstance(m, dict) else str(m) for m in raw]
+        # 纯列表
+        elif isinstance(data, list):
+            models = [m["id"] if isinstance(m, dict) else str(m) for m in data]
+        return {"models": sorted(models), "empty": not models}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"无法连接供应商：{e}")
+
 @app.get("/configs/{config_id}/models")
 def config_models(config_id: int):
     """返回指定配置的可用模型列表。"""
@@ -262,42 +377,101 @@ def active_configs():
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    if req.model not in MODELS:
-        raise HTTPException(status_code=400, detail=f"Unknown model: {req.model}")
+    if not req.model:
+        raise HTTPException(status_code=400, detail="model 不能为空")
 
     start_time = time.time()
     called_at  = datetime.now(timezone.utc).isoformat()
 
     def generate():
-        _key = get_active_anthropic_key() or _env_api_key
+        _key, _base_url, _provider = get_config_credentials(req.config_id)
         if not _key:
-            yield f"data: {json.dumps({'error': '未配置 API Key，请在管理员面板添加 Anthropic 配置'})}\n\n"
+            yield f"data: {json.dumps({'error': '未配置 API Key，请在管理员面板添加配置'})}\n\n"
             return
-        _client = anthropic.Anthropic(api_key=_key)
+
+        # 规范化 base_url
+        _normalized_url = (_base_url or '').rstrip('/')
+
+        # 判断是否使用 Anthropic 原生格式
+        _use_anthropic = (_provider or '').lower() == 'anthropic' or (
+            'anthropic' in _normalized_url and 'api.anthropic.com' in _normalized_url
+        )
+
         input_tokens  = 0
         output_tokens = 0
         success       = 1
         error_msg     = None
         try:
-            kwargs = dict(
-                model=req.model,
-                max_tokens=4096,
-                messages=[m.model_dump() for m in req.messages],
-            )
-            if req.system:
-                kwargs["system"] = req.system
-
-            with _client.messages.stream(**kwargs) as stream:
-                for text in stream.text_stream:
-                    yield f"data: {json.dumps({'text': text})}\n\n"
-                usage = stream.get_final_message().usage
-                input_tokens  = usage.input_tokens
-                output_tokens = usage.output_tokens
+            if _use_anthropic:
+                # Anthropic 原生 SDK
+                _ak = {"api_key": _key}
+                if _normalized_url:
+                    _base = _normalized_url[:-3].rstrip('/') if _normalized_url.endswith('/v1') else _normalized_url
+                    _ak["base_url"] = _base
+                _client = anthropic.Anthropic(**_ak)
+                kwargs = dict(model=req.model, max_tokens=4096,
+                              messages=[m.model_dump() for m in req.messages])
+                if req.system:
+                    kwargs["system"] = req.system
+                with _client.messages.stream(**kwargs) as stream:
+                    for text in stream.text_stream:
+                        yield f"data: {json.dumps({'text': text})}\n\n"
+                    usage = stream.get_final_message().usage
+                    input_tokens  = usage.input_tokens
+                    output_tokens = usage.output_tokens
+            else:
+                # OpenAI 兼容格式（一步API、New API 等代理）
+                from openai import OpenAI as _OpenAI
+                _base = _normalized_url if _normalized_url else "https://api.openai.com/v1"
+                if not _normalized_url.endswith('/v1'):
+                    _base = _normalized_url + '/v1' if _normalized_url else "https://api.openai.com/v1"
+                _oc = _OpenAI(api_key=_key, base_url=_base)
+                # 拼装 messages：Anthropic 格式 → OpenAI 格式
+                oai_msgs = []
+                if req.system:
+                    oai_msgs.append({"role": "system", "content": req.system})
+                for m in req.messages:
+                    raw = m.model_dump()
+                    # content 可能是 JSON 字符串（从 DB 加载的历史消息）
+                    if isinstance(raw.get("content"), str):
+                        try:
+                            import json as _json
+                            parsed = _json.loads(raw["content"])
+                            if isinstance(parsed, list):
+                                raw["content"] = parsed
+                        except Exception:
+                            pass
+                    if isinstance(raw.get("content"), list):
+                        oai_content = []
+                        for block in raw["content"]:
+                            btype = block.get("type", "")
+                            if btype == "text":
+                                oai_content.append({"type": "text", "text": block.get("text", "")})
+                            elif btype == "image":
+                                src = block.get("source", {})
+                                if src.get("type") == "base64":
+                                    url = f"data:{src['media_type']};base64,{src['data']}"
+                                    oai_content.append({"type": "image_url", "image_url": {"url": url}})
+                        oai_msgs.append({"role": raw["role"], "content": oai_content})
+                    else:
+                        oai_msgs.append({"role": raw["role"], "content": raw["content"]})
+                stream = _oc.chat.completions.create(
+                    model=req.model, messages=oai_msgs,
+                    max_tokens=4096, stream=True
+                )
+                for chunk in stream:
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if delta and delta.content:
+                        yield f"data: {json.dumps({'text': delta.content})}\n\n"
+                    # 从最后一个 chunk 获取用量（部分代理支持）
+                    if hasattr(chunk, 'usage') and chunk.usage:
+                        input_tokens  = chunk.usage.prompt_tokens or 0
+                        output_tokens = chunk.usage.completion_tokens or 0
             yield "data: [DONE]\n\n"
         except Exception as e:
             success   = 0
             error_msg = str(e)
-            yield f"data: {json.dumps({'error': error_msg})}\n\n"
+            yield f"data: {json.dumps({'error': _friendly_error(e)})}\n\n"
         finally:
             if req.config_id is not None:
                 duration_ms = int((time.time() - start_time) * 1000)
@@ -680,12 +854,57 @@ def create_session(body: SessionIn, x_token: str = Header(default="")):
         conn.commit()
     return {"session_id": cur.lastrowid}
 
+class SessionRenameIn(BaseModel):
+    title: str
+
+@app.put("/sessions/{session_id}/title")
+def rename_session(session_id: int, body: SessionRenameIn, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        row = conn.execute("SELECT user_id FROM chat_sessions WHERE id=?", (session_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        if row["user_id"] != user["id"] and user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="无权限")
+        conn.execute("UPDATE chat_sessions SET title=? WHERE id=?", (body.title.strip(), session_id))
+        conn.commit()
+    return {"ok": True}
+
+@app.put("/sessions/{session_id}/pin")
+def pin_session(session_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        row = conn.execute("SELECT user_id, pinned FROM chat_sessions WHERE id=?", (session_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        if row["user_id"] != user["id"] and user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="无权限")
+        new_pinned = 0 if row["pinned"] else 1
+        conn.execute("UPDATE chat_sessions SET pinned=? WHERE id=?", (new_pinned, session_id))
+        conn.commit()
+    return {"pinned": bool(new_pinned)}
+
+@app.delete("/sessions/{session_id}")
+def delete_session(session_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        row = conn.execute("SELECT user_id FROM chat_sessions WHERE id=?", (session_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        if row["user_id"] != user["id"] and user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="无权限")
+        conn.execute("DELETE FROM chat_messages WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM chat_sessions WHERE id=?", (session_id,))
+        conn.commit()
+    return {"ok": True}
+
 @app.post("/sessions/messages")
 def save_message(body: MessageIn, x_token: str = Header(default="")):
     get_current_user(x_token)
     now = datetime.now(timezone.utc).isoformat()
-    # content 若为列表（多模态）则只保存文本部分
-    content = body.content if isinstance(body.content, str) else str(body.content)
+    # content 若为列表，序列化为 JSON 字符串完整保存（含图片 base64）
+    import json as _json
+    content = body.content if isinstance(body.content, str) else _json.dumps(body.content, ensure_ascii=False)
     with get_db() as conn:
         conn.execute(
             "INSERT INTO chat_messages (session_id, role, content, created_at) VALUES (?,?,?,?)",
@@ -704,7 +923,7 @@ def my_history(x_token: str = Header(default="")):
             FROM chat_sessions s
             LEFT JOIN api_configs c ON c.id = s.config_id
             WHERE s.user_id = ?
-            ORDER BY s.created_at DESC LIMIT 100
+            ORDER BY s.pinned DESC, s.created_at DESC LIMIT 100
         """, (user["id"],)).fetchall()
     return [dict(r) for r in rows]
 
@@ -839,6 +1058,81 @@ def approved_configs(x_token: str = Header(default="")):
             WHERE r.user_id=? AND r.status='approved' AND c.is_active=1
             ORDER BY c.name
         """, (user["id"],)).fetchall()
+    return [dict(r) for r in rows]
+
+# ── SQLite 批量历史 ────────────────────────────────────────
+
+class BatchJobIn(BaseModel):
+    task_name: str
+    model: str = ""
+    config_id: int | None = None
+    label: str = ""
+    row_count: int = 0
+
+class BatchJobRowIn(BaseModel):
+    job_id: int
+    row_index: int
+    input_json: str
+    output_text: str = ""
+    success: int = 1
+    error_msg: str = ""
+
+@app.post("/batch2/jobs")
+def create_batch_job(body: BatchJobIn, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO batch_jobs (user_id,task_name,model,config_id,label,row_count,created_at) VALUES (?,?,?,?,?,?,?)",
+            (user["id"], body.task_name, body.model, body.config_id, body.label, body.row_count, now)
+        )
+        conn.commit()
+    return {"job_id": cur.lastrowid}
+
+@app.post("/batch2/rows")
+def save_batch_row(body: BatchJobRowIn, x_token: str = Header(default="")):
+    get_current_user(x_token)
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO batch_job_rows (job_id,row_index,input_json,output_text,success,error_msg) VALUES (?,?,?,?,?,?)",
+            (body.job_id, body.row_index, body.input_json, body.output_text, body.success, body.error_msg)
+        )
+        if body.success:
+            conn.execute("UPDATE batch_jobs SET done_count=done_count+1 WHERE id=?", (body.job_id,))
+        else:
+            conn.execute("UPDATE batch_jobs SET fail_count=fail_count+1 WHERE id=?", (body.job_id,))
+        conn.commit()
+    return {"ok": True}
+
+@app.put("/batch2/jobs/{job_id}/finish")
+def finish_batch_job(job_id: int, status: str = "completed", x_token: str = Header(default="")):
+    get_current_user(x_token)
+    with get_db() as conn:
+        conn.execute("UPDATE batch_jobs SET status=? WHERE id=?", (status, job_id))
+        conn.commit()
+    return {"ok": True}
+
+@app.get("/batch2/jobs")
+def list_batch_jobs(x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM batch_jobs WHERE user_id=? ORDER BY created_at DESC LIMIT 50",
+            (user["id"],)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+@app.get("/batch2/jobs/{job_id}/rows")
+def get_batch_job_rows(job_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        job = conn.execute("SELECT user_id FROM batch_jobs WHERE id=?", (job_id,)).fetchone()
+        if not job or job["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="无权限")
+        rows = conn.execute(
+            "SELECT * FROM batch_job_rows WHERE job_id=? ORDER BY row_index",
+            (job_id,)
+        ).fetchall()
     return [dict(r) for r in rows]
 
 # ── ClickHouse ────────────────────────────────────────────
@@ -1038,6 +1332,181 @@ def save_result(body: SaveResultIn, x_token: str = Header(default="")):
         return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# ── 脚本编辑器 ────────────────────────────────────────────
+
+import tempfile, threading
+
+SCRIPT_BASE_DIR = os.path.join(tempfile.gettempdir(), "script_runs")
+os.makedirs(SCRIPT_BASE_DIR, exist_ok=True)
+SCRIPT_WORKER   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "script_worker.py")
+SCRIPT_TIMEOUT  = 30
+SCRIPT_MAX_SIZE = 1024 ** 3  # 1 GB
+
+def _check_approved(user_id: int):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id FROM api_requests WHERE user_id=? AND status='approved' LIMIT 1",
+            (user_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=403, detail="需要已审批的 API 权限才能运行脚本")
+
+@app.post("/script/upload")
+async def script_upload(file: UploadFile, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    _check_approved(user["id"])
+
+    suffix = os.path.splitext(file.filename or "")[1].lower()
+    if suffix not in ('.parquet', '.json', '.csv', '.xlsx', '.xls'):
+        raise HTTPException(status_code=400, detail="仅支持 parquet / json / csv / xlsx")
+
+    content = await file.read()
+    if len(content) > SCRIPT_MAX_SIZE:
+        raise HTTPException(status_code=413, detail="文件超过 1GB 上限")
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=SCRIPT_BASE_DIR)
+    tmp.write(content); tmp.close()
+
+    try:
+        import pandas as _pd
+        loaders = {
+            '.parquet': _pd.read_parquet,
+            '.json':    _pd.read_json,
+            '.xlsx':    _pd.read_excel,
+            '.xls':     _pd.read_excel,
+            '.csv':     _pd.read_csv,
+        }
+        df = loaders[suffix](tmp.name)
+        rows, cols = df.shape
+        col_names  = df.columns.tolist()
+    except Exception:
+        rows, cols, col_names = 0, 0, []
+
+    return {"file_id": tmp.name, "filename": file.filename,
+            "rows": rows, "columns": cols, "col_names": col_names}
+
+
+@app.post("/script/run")
+async def script_run(
+    code:      str      = Body(...),
+    config_id: int|None = Body(None),
+    model:     str      = Body(""),
+    file_id:   str|None = Body(None),
+    x_token:   str      = Header(default="")
+):
+    user = get_current_user(x_token)
+    _check_approved(user["id"])
+
+    run_id   = str(uuid.uuid4())
+    work_dir = os.path.join(SCRIPT_BASE_DIR, run_id)
+    os.makedirs(work_dir, exist_ok=True)
+
+    script_path = os.path.join(work_dir, "user_script.py")
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(code)
+
+    cmd = [
+        sys.executable, SCRIPT_WORKER,
+        "--run-id",    run_id,
+        "--script",    script_path,
+        "--work-dir",  work_dir,
+        "--token",     x_token,
+        "--config-id", str(config_id) if config_id else "",
+        "--model",     model or "",
+        "--file-path", file_id or "",
+        "--timeout",   str(SCRIPT_TIMEOUT),
+    ]
+
+    async def generate():
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            while True:
+                try:
+                    line = await asyncio.wait_for(
+                        proc.stdout.readline(), timeout=SCRIPT_TIMEOUT + 10
+                    )
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    yield f"data: {json.dumps({'type':'error','text':'Worker 无响应，已强制停止'})}\n\n"
+                    break
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").strip()
+                if text:
+                    yield f"data: {text}\n\n"
+            # drain stderr（worker 自身错误）
+            try:
+                err = await asyncio.wait_for(proc.stderr.read(), timeout=3)
+                if err:
+                    msg = err.decode("utf-8", errors="replace").strip()
+                    if msg:
+                        yield f"data: {json.dumps({'type':'error','text':msg})}\n\n"
+            except asyncio.TimeoutError:
+                pass
+        except Exception as e:
+            try: proc.kill()
+            except Exception: pass
+            yield f"data: {json.dumps({'type':'error','text':str(e)})}\n\n"
+        finally:
+            try: await proc.wait()
+            except Exception: pass
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/script/result/{run_id}/download")
+def script_download(run_id: str, x_token: str = Header(default="")):
+    get_current_user(x_token)
+    work_dir = os.path.join(SCRIPT_BASE_DIR, run_id)
+    if not os.path.isdir(work_dir):
+        raise HTTPException(status_code=404, detail="运行结果不存在或已过期")
+
+    import io, zipfile
+    from fastapi.responses import Response
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname in os.listdir(work_dir):
+            fpath = os.path.join(work_dir, fname)
+            if os.path.isfile(fpath) and not fname.startswith("_") and fname != "user_script.py":
+                zf.write(fpath, fname)
+    buf.seek(0)
+    return Response(
+        content=buf.read(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=result_{run_id[:8]}.zip"}
+    )
+
+
+# ── 后台清理（每小时删除 24h 前的运行目录）────────────────
+def _cleanup_old_runs():
+    import shutil
+    cutoff = time.time() - 86400
+    try:
+        for name in os.listdir(SCRIPT_BASE_DIR):
+            path = os.path.join(SCRIPT_BASE_DIR, name)
+            if os.path.isdir(path):
+                try:
+                    if os.path.getmtime(path) < cutoff:
+                        shutil.rmtree(path, ignore_errors=True)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+def _start_cleanup_thread():
+    def loop():
+        while True:
+            time.sleep(3600)
+            _cleanup_old_runs()
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+
+_start_cleanup_thread()
 
 if __name__ == "__main__":
     import uvicorn
