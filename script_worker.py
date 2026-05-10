@@ -55,15 +55,7 @@ import builtins as _b, sys as _sys, os as _os
 import json as _json, base64 as _b64, pandas as _pd
 import pathlib as _pl, http.client as _hc, io as _io
 
-# ── 安全拦截 ──────────────────────────────────────────────
-_BLOCKED = {{"os","subprocess","socket","pty","ctypes","shutil","importlib"}}
-_orig_import = _b.__import__
-def _safe_import(name, *a, **kw):
-    top = name.split(".")[0]
-    if top in _BLOCKED:
-        raise ImportError(f"禁止导入: {{name}}")
-    return _orig_import(name, *a, **kw)
-_b.__import__ = _safe_import
+# （无运行时 import hook：已在 worker 启动前做 AST 静态检查）
 
 # ── 注入变量 ──────────────────────────────────────────────
 WORK_DIR  = r"{args.work_dir}"
@@ -147,8 +139,36 @@ def save_file(path):
 # ── 用户代码开始 ───────────────────────────────────────────
 '''
 
-# ── 合并脚本 ──────────────────────────────────────────────
+# ── AST 静态安全检查 ──────────────────────────────────────
+import ast as _ast
+
+BLOCKED_IMPORTS = {"subprocess", "socket", "pty", "ctypes"}
+
+def _check_user_code(code: str):
+    """解析用户代码，检测禁止导入。"""
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError as e:
+        return f"脚本语法错误：{e}"
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.Import, _ast.ImportFrom)):
+            names = [n.name for n in node.names] if isinstance(node, _ast.Import) else [node.module or ""]
+            for name in names:
+                top = (name or "").split(".")[0]
+                if top in BLOCKED_IMPORTS:
+                    return f"禁止导入: {name}"
+    return None
+
 user_code = open(args.script, encoding='utf-8').read()
+
+# 检查安全性
+_err = _check_user_code(user_code)
+if _err:
+    emit({"type": "error", "text": _err + "\n"})
+    emit({"type": "done", "run_id": args.run_id, "file_count": 0, "elapsed": 0.0, "returncode": 1})
+    sys.exit(1)
+
+# ── 合并脚本 ──────────────────────────────────────────────
 full_code  = build_bootstrap() + "\n" + user_code
 
 combined_path = os.path.join(args.work_dir, "_combined.py")

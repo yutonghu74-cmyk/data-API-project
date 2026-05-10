@@ -6,84 +6,245 @@
   <title>API调用 — 数据平台</title>
   <link rel="stylesheet" href="../assets/css/platform.css">
   <style>
-    .sub-tabs {
-      display: flex; border-bottom: 1px solid var(--border);
-      margin-top: -10px; margin-bottom: 0; background: #fff;
+    /* ── Tab 导航 ── */
+    .sub-tabs { display:flex; border-bottom:1px solid var(--border); margin-top:-10px; margin-bottom:0; background:#fff; }
+    .sub-tab { padding:10px 22px; font-size:.9rem; cursor:pointer; border:none; background:none; color:var(--text-muted); border-bottom:2px solid transparent; margin-bottom:-1px; transition:color .15s; }
+    .sub-tab:hover { color:var(--text); }
+    .sub-tab.active { color:var(--green); border-bottom-color:var(--green); font-weight:500; }
+    .sub-panel { display:none; }
+    .sub-panel.active { display:flex; flex-direction:column; }
+
+    /* ── 在线使用主布局（左历史 + 右聊天）── */
+    .chat-layout {
+      display: flex;
+      height: calc(100vh - 148px);
     }
-    .sub-tab {
-      padding: 10px 22px; font-size: .9rem; cursor: pointer;
-      border: none; background: none; color: var(--text-muted);
-      border-bottom: 2px solid transparent; margin-bottom: -1px;
-      transition: color .15s;
+
+    /* ── 左侧历史会话栏 ── */
+    .session-sidebar {
+      width: 220px; flex-shrink: 0;
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      background: #fafafa;
     }
-    .sub-tab:hover { color: var(--text); }
-    .sub-tab.active { color: var(--green); border-bottom-color: var(--green); font-weight: 500; }
-    .sub-panel { display: none; }
-    .sub-panel.active { display: block; }
-    .chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 176px); }
-    .config-bar { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px; margin-top: 20px; }
+    .session-sidebar-head {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .new-chat-btn {
+      width: 100%; padding: 7px 0; font-size: .85rem;
+      background: var(--green); color: #fff; border: none;
+      border-radius: 6px; cursor: pointer; font-weight: 500;
+    }
+    .new-chat-btn:hover { background: var(--green-hover); }
+    .session-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+    .session-item {
+      padding: 8px 10px 8px 12px; cursor: pointer; font-size: .82rem;
+      color: var(--text); border-radius: 0; transition: background .12s;
+      display: flex; align-items: flex-start; gap: 4px; position: relative;
+    }
+    .session-item:hover { background: var(--border); }
+    .session-item.active { background: var(--green-bg); color: var(--green); font-weight: 500; }
+    .session-item-body { flex: 1; min-width: 0; }
+    .session-item-title { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .session-item-meta { font-size:.72rem; color:var(--text-muted); margin-top:2px; }
+    .session-pin-icon { font-size:.7rem; color:var(--green); flex-shrink:0; margin-top:2px; }
+    .session-more-btn {
+      display: none; flex-shrink: 0; align-self: flex-start;
+      background: none; border: none; padding: 2px 5px; cursor: pointer;
+      color: var(--text-muted); border-radius: 3px; font-size: 1rem; line-height: 1;
+    }
+    .session-item:hover .session-more-btn,
+    .session-item.menu-open .session-more-btn { display: block; }
+    .session-more-btn:hover { background: rgba(0,0,0,.08); }
+
+    /* 下拉菜单 */
+    .session-menu {
+      display: none; position: fixed; z-index: 500;
+      background: #fff; border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+      min-width: 120px; padding: 4px 0;
+    }
+    .session-menu.open { display: block; }
+    .session-menu-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 14px; font-size: .83rem; cursor: pointer;
+      color: var(--text); white-space: nowrap;
+    }
+    .session-menu-item:hover { background: var(--surface); }
+    .session-menu-item.danger { color: #dc2626; }
+    .session-menu-item.danger:hover { background: #fee2e2; }
+
+    /* ── 右侧聊天区 ── */
+    .chat-main {
+      flex: 1; display: flex; flex-direction: column; min-width: 0;
+    }
+    .config-bar {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px; padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      background: #fff;
+    }
+    .config-bar .form-group { margin: 0; }
     .messages {
-      flex: 1; overflow-y: auto;
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 16px;
-      display: flex; flex-direction: column; gap: 12px;
-      margin-bottom: 10px;
+      flex: 1; overflow-y: auto; padding: 20px 24px;
+      display: flex; flex-direction: column; gap: 16px;
+      background: var(--surface);
     }
     .bubble {
-      max-width: 80%; padding: 10px 14px; border-radius: 12px;
-      font-size: .92rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+      max-width: 75%; padding: 10px 14px; border-radius: 14px;
+      font-size: .92rem; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
     }
-    .bubble-user {
-      background: var(--green); color: #fff;
-      align-self: flex-end; border-bottom-right-radius: 4px;
+    .bubble-user { background: var(--green); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+    .bubble-assistant { background: #fff; border: 1px solid var(--border); align-self: flex-start; border-bottom-left-radius: 4px; }
+    .bubble-error { background: #fee2e2; border:1px solid #fecaca; color:#dc2626; align-self:flex-start; border-radius:var(--radius); font-size:.85rem; }
+    .retry-btn { margin-top:6px; padding:3px 10px; font-size:.78rem; background:#fff; border:1px solid #fecaca; color:#dc2626; border-radius:4px; cursor:pointer; }
+    .retry-btn:hover { background:#fee2e2; }
+    .cursor::after { content:'▋'; animation:blink .7s step-end infinite; }
+    @keyframes blink { 50% { opacity:0; } }
+
+    /* ── 图片缩略图 ── */
+    .thumb-wrap {
+      position: relative; display: inline-block;
+      width: 64px; height: 64px; border-radius: 6px;
+      overflow: hidden; border: 1px solid var(--border);
+      flex-shrink: 0;
     }
-    .bubble-assistant {
-      background: #fff; border: 1px solid var(--border);
-      align-self: flex-start; border-bottom-left-radius: 4px;
+    .thumb-wrap img { width:100%; height:100%; object-fit:cover; display:block; }
+    .thumb-wrap .thumb-del {
+      position:absolute; top:2px; right:2px;
+      width:18px; height:18px; border-radius:50%;
+      background:rgba(0,0,0,.5); color:#fff;
+      font-size:11px; line-height:18px; text-align:center;
+      cursor:pointer; border:none; padding:0;
     }
-    .bubble-error {
-      background: #fee2e2; border: 1px solid #fecaca; color: #dc2626;
-      align-self: flex-start; border-radius: var(--radius); font-size: .85rem;
-    }
-    .cursor::after { content: '▋'; animation: blink .7s step-end infinite; }
-    @keyframes blink { 50% { opacity: 0; } }
-    .input-area { display: flex; flex-direction: column; gap: 6px; }
-    .input-row { display: flex; gap: 8px; align-items: flex-end; }
-    .input-row textarea {
-      flex: 1; resize: none; height: 44px; line-height: 1.5;
-      font-family: var(--font);
-    }
-    .attachments-row { display: flex; flex-wrap: wrap; gap: 6px; }
     .attachment-tag {
-      display: flex; align-items: center; gap: 5px;
-      background: #fff; border: 1px solid var(--border);
-      border-radius: 6px; padding: 3px 8px; font-size: .8rem;
+      display:flex; align-items:center; gap:5px;
+      background:#fff; border:1px solid var(--border);
+      border-radius:6px; padding:3px 8px; font-size:.8rem;
     }
-    .attachment-tag button {
-      background: none; color: var(--text-muted); padding: 0 2px;
-      font-size: .85rem; border-radius: 3px;
+    .attachment-tag button { background:none; color:var(--text-muted); padding:0 2px; font-size:.85rem; }
+    .attachment-tag button:hover { color:#dc2626; }
+
+    /* ── 输入区 ── */
+    .input-area { padding: 10px 16px; border-top: 1px solid var(--border); background: #fff; }
+    .attachments-row { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+    .input-row { display:flex; gap:8px; align-items:flex-end; }
+    .input-row textarea { flex:1; resize:none; height:44px; line-height:1.5; font-family:var(--font); }
+
+    .empty-hint { color:var(--text-muted); font-size:.85rem; text-align:center; margin:auto; }
+    .no-api-hint { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--text-muted); }
+    .no-api-hint a { color:var(--green); }
+    .drag-over { outline: 2px dashed var(--green); outline-offset: -4px; }
+
+    /* ── 脚本编辑器 ──────────────────────────────────────── */
+    #panel-script { height: calc(100vh - 148px); }
+    .script-layout { display:flex; height:100%; }
+    .script-left {
+      width:50%; min-width:300px; display:flex; flex-direction:column;
+      border-right:1px solid var(--border); padding:10px; gap:8px; overflow:hidden;
     }
-    .attachment-tag button:hover { color: #dc2626; }
-    .drag-over { border-color: var(--green) !important; background: var(--green-bg) !important; }
-    .empty-hint { color: var(--text-muted); font-size: .85rem; text-align: center; margin: auto; }
-    .no-api-hint {
-      flex: 1; display: flex; flex-direction: column; align-items: center;
-      justify-content: center; gap: 12px; color: var(--text-muted);
+    .script-right { flex:1; display:flex; flex-direction:column; min-width:0; }
+    .script-file-drop {
+      border:2px dashed var(--border); border-radius:var(--radius);
+      padding:8px 14px; cursor:pointer; text-align:center;
+      font-size:.83rem; color:var(--text-muted); transition:border-color .15s;
     }
-    .no-api-hint a { color: var(--green); }
-    .save-row { display: flex; align-items: center; gap: 8px; font-size: .83rem; color: var(--text-muted); }
-    .save-row input { width: 280px; height: 32px; font-size: .83rem; }
+    .script-file-drop:hover,.script-file-drop.dragover {
+      border-color:var(--green); color:var(--green); background:var(--green-bg);
+    }
+    .script-config { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; flex-shrink:0; }
+    .script-config .form-group label { font-size:.74rem; }
+    .script-editor-container {
+      flex:1; min-height:0; border:1px solid var(--border);
+      border-radius:var(--radius); overflow:hidden;
+    }
+    .script-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; padding-top:2px; }
+    .script-out-tabs { display:flex; border-bottom:1px solid var(--border); background:#fff; flex-shrink:0; }
+    .script-out-tab {
+      padding:8px 16px; font-size:.85rem; cursor:pointer; border:none; background:none;
+      color:var(--text-muted); border-bottom:2px solid transparent;
+    }
+    .script-out-tab.active { color:var(--green); border-bottom-color:var(--green); font-weight:500; }
+    .script-out-panel { display:none; flex:1; overflow:hidden; flex-direction:column; }
+    .script-out-panel.active { display:flex; }
+    .script-log {
+      flex:1; overflow-y:auto; padding:12px 16px;
+      font-family:monospace; font-size:.82rem; line-height:1.6;
+      background:var(--surface); white-space:pre-wrap; word-break:break-word;
+    }
+    .log-stdout { color:var(--text); }
+    .log-stderr { color:#e06c75; }
+    .log-error  { color:#dc2626; }
+    .log-info   { color:#6b7280; font-style:italic; }
+    .script-log img   { max-width:100%; border-radius:6px; margin:4px 0; cursor:zoom-in; display:block; }
+    .script-log video { max-width:100%; border-radius:6px; margin:4px 0; display:block; }
+    .script-file-badge {
+      background:var(--green); color:#fff; border-radius:10px;
+      font-size:.7rem; padding:0 5px; margin-left:4px; min-width:16px;
+      display:inline-flex; align-items:center; justify-content:center;
+    }
+    .result-file-item {
+      display:flex; align-items:center; gap:10px;
+      padding:10px 14px; border-bottom:1px solid var(--border); font-size:.83rem;
+    }
+    .result-file-item .file-name { flex:1; font-family:monospace; word-break:break-all; }
+    .result-file-item .file-size { color:var(--text-muted); font-size:.75rem; flex-shrink:0; }
+
+    /* 安全提示悬浮条（与顶栏平行，居中，不撑满宽度） */
+    .security-banner {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: #fffbeb; border: 1px solid #fde68a;
+      border-radius: 20px; box-shadow: 0 2px 8px rgba(0,0,0,.08);
+      padding: 5px 14px 5px 12px; font-size: .82rem; color: #92400e;
+      position: fixed;
+      top: calc((var(--header-h) - 30px) / 2);
+      left: 50%; transform: translateX(-20%);
+      z-index: 110; white-space: nowrap;
+    }
+    .security-banner .icon { font-size: .9rem; flex-shrink: 0; }
+    .security-banner .close-btn {
+      background: none; border: none; cursor: pointer;
+      color: #b45309; font-size: 1rem; padding: 0 0 0 6px; line-height: 1;
+      opacity: .7; flex-shrink: 0;
+    }
+    .security-banner .close-btn:hover { opacity: 1; }
+
+    /* 图片放大灯箱 */
+    .lightbox {
+      display: none; position: fixed; inset: 0; z-index: 9999;
+      background: rgba(0,0,0,.85); align-items: center; justify-content: center;
+      cursor: zoom-out;
+    }
+    .lightbox.open { display: flex; }
+    .lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 6px; object-fit: contain; }
   </style>
+
+  <!-- 图片放大灯箱 -->
+  <div class="lightbox" id="lightbox">
+    <img id="lightboxImg" src="" alt="">
+  </div>
+
+  <!-- 全局会话操作下拉菜单（单例） -->
+  <div class="session-menu" id="sessionMenu">
+    <div class="session-menu-item" id="menuPin">📌 置顶</div>
+    <div class="session-menu-item" id="menuRename">✏️ 重命名</div>
+    <div class="session-menu-item danger" id="menuDelete">🗑️ 删除</div>
+  </div>
+  <!-- Monaco Editor（懒加载，进入脚本 Tab 时初始化）-->
+  <script>var require = { paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } };</script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
 </head>
 <body>
 
-<!-- 顶部固定导航栏 -->
-<div class="top-bar">
-  <button class="sidebar-toggle" id="sidebarToggle">☰</button>
-  <span class="brand">数据平台</span>
-  <div style="flex:1"></div>
-  <div class="breadcrumb-right" id="userBar"></div>
+<!-- 安全提示横幅 -->
+<div class="security-banner" id="securityBanner">
+  <span class="icon">⚠️</span>
+  <span class="text">注意信息安全：请勿在对话中输入账号密码、身份证号、银行卡号等敏感信息。</span>
+  <button class="close-btn" id="bannerClose" title="关闭">×</button>
 </div>
+
+<!-- 顶部固定导航栏 -->
 
 <div class="layout">
   <!-- 侧边栏 -->
@@ -105,53 +266,137 @@
   <!-- 主内容 -->
   <div class="main" style="padding-bottom:0">
 <div class="breadcrumb">
+  <button class="sidebar-toggle" id="sidebarToggle">☰</button><span class="brand">数据平台</span>
+  <span class="sep">›</span>
   <a href="#">三方API管理</a>
   <span class="sep">›</span>
   <span class="current">API调用</span>
+  <div class="breadcrumb-right" id="userBar"></div>
 </div>
 
 
     <!-- 子界面 Tab -->
     <div class="sub-tabs">
-      <button class="sub-tab active" data-panel="chat">在线试用</button>
+      <button class="sub-tab active" data-panel="chat">在线使用</button>
       <button class="sub-tab" data-panel="batch">批量处理</button>
-      <button class="sub-tab" data-panel="history">历史记录</button>
+      <button class="sub-tab" data-panel="script">脚本</button>
     </div>
 
-    <!-- ① API调用 -->
+    <!-- ① 在线使用（左历史 + 右聊天） -->
     <div class="sub-panel active" id="panel-chat">
-      <div class="chat-wrap">
-        <div class="config-bar">
-          <div class="form-group" style="margin:0">
-            <label>供应商</label>
-            <select id="providerSelect"><option value="">— 请选择 —</option></select>
+      <div class="chat-layout">
+
+        <!-- 左：会话历史 -->
+        <div class="session-sidebar">
+          <div class="session-sidebar-head">
+            <button class="new-chat-btn" id="newChatBtn">＋ 新对话</button>
           </div>
-          <div class="form-group" style="margin:0">
-            <label>API名称</label>
-            <select id="configSelect"><option value="">— 请选择 —</option></select>
+          <div class="session-list" id="sessionList"></div>
+        </div>
+
+        <!-- 右：聊天主区 -->
+        <div class="chat-main">
+          <!-- 配置栏 -->
+          <div class="config-bar">
+            <div class="form-group">
+              <label>供应商</label>
+              <select id="providerSelect"><option value="">— 请选择 —</option></select>
+            </div>
+            <div class="form-group">
+              <label>API名称</label>
+              <select id="configSelect"><option value="">— 请选择 —</option></select>
+            </div>
+            <div class="form-group">
+              <label>模型</label>
+              <select id="modelSelect"><option value="">— 请选择 —</option></select>
+            </div>
           </div>
-          <div class="form-group" style="margin:0">
-            <label>模型</label>
-            <select id="modelSelect"><option value="">— 请选择 —</option></select>
+
+          <!-- 消息流 -->
+          <div class="messages" id="messages">
+            <p class="empty-hint">发送消息开始对话</p>
+          </div>
+
+          <!-- 输入区 -->
+          <div class="input-area">
+            <div class="attachments-row" id="attachmentsRow"></div>
+            <div class="input-row">
+              <textarea id="userInput" placeholder="输入消息… (Enter 发送，Shift+Enter 换行)"></textarea>
+              <input type="file" id="fileInput" multiple
+                     accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/csv,text/markdown,.md"
+                     style="display:none">
+              <button class="btn btn-secondary" id="attachBtn" title="附加文件">📎</button>
+              <button class="btn btn-primary"   id="sendBtn">发送</button>
+            </div>
           </div>
         </div>
-        <div class="messages" id="messages">
-          <p class="empty-hint">发送消息开始对话</p>
-        </div>
-        <div class="input-area">
-          <div class="attachments-row" id="attachmentsRow"></div>
-          <div class="input-row">
-            <textarea id="userInput" placeholder="输入消息… (Enter 发送，Shift+Enter 换行)"></textarea>
-            <input type="file" id="fileInput" multiple
-                   accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/csv,text/markdown,.md"
-                   style="display:none">
-            <button class="btn btn-secondary" id="attachBtn" title="附加文件">📎</button>
-            <button class="btn btn-primary"   id="sendBtn">发送</button>
-            <button class="btn btn-secondary" id="clearBtn">清空</button>
+      </div>
+    </div>
+
+    <!-- ③ 脚本编辑器 -->
+    <div class="sub-panel" id="panel-script">
+      <div class="script-layout">
+        <!-- 左：文件 + 配置 + 编辑器 -->
+        <div class="script-left">
+          <div id="scriptFileArea">
+            <input type="file" id="scriptFileInput"
+                   accept=".parquet,.json,.csv,.xlsx,.xls" style="display:none">
+            <div class="script-file-drop" id="scriptFileDrop">
+              <div>📂 拖拽或点击上传数据文件</div>
+              <div style="font-size:.73rem;color:var(--text-muted)">.parquet / .json / .csv / .xlsx</div>
+            </div>
+            <div id="scriptFileInfo" style="display:none;align-items:center;padding:6px 2px;gap:8px">
+              <span id="scriptFileName" style="font-size:.82rem;font-weight:500"></span>
+              <span id="scriptFileStats" style="font-size:.75rem;color:var(--text-muted)"></span>
+              <button class="btn btn-secondary" id="scriptFileClear"
+                      style="padding:2px 8px;font-size:.75rem">✕</button>
+            </div>
           </div>
-          <div class="save-row">
-            <span>保存结果到：</span>
-            <input id="savePath" placeholder="留空则不保存，如 /Users/me/result.txt">
+          <div class="script-config">
+            <div class="form-group" style="margin:0">
+              <label>供应商</label>
+              <select id="scriptProviderSel"><option value="">— 请选择 —</option></select>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label>API名称</label>
+              <select id="scriptConfigSel"><option value="">— 请选择 —</option></select>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label>模型</label>
+              <select id="scriptModelSel"><option value="">— 请选择 —</option></select>
+            </div>
+          </div>
+          <div id="scriptEditorContainer" class="script-editor-container"></div>
+          <div class="script-actions">
+            <button class="btn btn-primary"   id="scriptRunBtn">▶ 运行</button>
+            <button class="btn btn-secondary" id="scriptStopBtn" style="display:none">■ 停止</button>
+            <button class="btn btn-secondary" id="scriptClearBtn">🗑 清空输出</button>
+            <span id="scriptTimer" style="font-size:.8rem;color:var(--text-muted)"></span>
+          </div>
+        </div>
+        <!-- 右：输出区 -->
+        <div class="script-right">
+          <div class="script-out-tabs">
+            <button class="script-out-tab active" data-out="log">运行日志</button>
+            <button class="script-out-tab" data-out="files">
+              结果文件
+              <span id="scriptFileBadge" class="script-file-badge" style="display:none"></span>
+            </button>
+          </div>
+          <div class="script-out-panel active" id="scriptOutLog">
+            <div class="script-log" id="scriptLog">
+              <span style="color:var(--text-muted);font-size:.82rem">运行后输出将显示在这里</span>
+            </div>
+          </div>
+          <div class="script-out-panel" id="scriptOutFiles">
+            <div id="scriptResultFiles" style="flex:1;overflow-y:auto">
+              <p style="color:var(--text-muted);font-size:.82rem;padding:16px">暂无结果文件</p>
+            </div>
+            <div id="scriptDownloadAll" style="display:none;padding:8px 12px;border-top:1px solid var(--border)">
+              <button class="btn btn-primary" id="scriptDlAllBtn" style="font-size:.82rem">
+                ↓ 打包下载全部
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -160,12 +405,6 @@
     <!-- ② 批量处理 -->
     <div class="sub-panel" id="panel-batch">
       <iframe src="batch.html?embed=1" id="batchFrame"
-              style="width:100%;height:calc(100vh - 96px);border:none;display:block"></iframe>
-    </div>
-
-    <!-- ③ 历史记录 -->
-    <div class="sub-panel" id="panel-history">
-      <iframe src="history.html?embed=1" id="historyFrame"
               style="width:100%;height:calc(100vh - 96px);border:none;display:block"></iframe>
     </div>
 
@@ -179,6 +418,11 @@ import { streamChat, fetchModels } from '../assets/js/stream.js';
 
 if (!requireLogin()) throw new Error('redirect');
 initSidebar();
+
+// ── 安全提示横幅 ──────────────────────────────────────────
+document.getElementById('bannerClose').addEventListener('click', () => {
+  document.getElementById('securityBanner').style.display = 'none';
+});
 
 const user = await refreshUser();
 document.getElementById('userBar').innerHTML = `
@@ -200,30 +444,236 @@ document.querySelectorAll('.sub-tab').forEach(tab => {
 const messagesEl     = document.getElementById('messages');
 const userInput      = document.getElementById('userInput');
 const sendBtn        = document.getElementById('sendBtn');
-const clearBtn       = document.getElementById('clearBtn');
 const providerSelect = document.getElementById('providerSelect');
 const configSelect   = document.getElementById('configSelect');
 const modelSelect    = document.getElementById('modelSelect');
 const attachmentsRow = document.getElementById('attachmentsRow');
 const fileInput      = document.getElementById('fileInput');
 const attachBtn      = document.getElementById('attachBtn');
-const savePath       = document.getElementById('savePath');
+const sessionListEl  = document.getElementById('sessionList');
 
 const ACCEPTED_TYPES = {
   'image/jpeg':'image','image/png':'image','image/gif':'image','image/webp':'image',
   'application/pdf':'document','text/plain':'document','text/csv':'document','text/markdown':'document',
 };
 const MAX_SIZE = 20 * 1024 * 1024;
-let history = [];
+let chatHistory = [];
 let attachments = [];
 let currentSessionId = null;
 
+// ── 会话历史侧栏 ───────────────────────────────────────────
+async function loadSessions() {
+  try {
+    const res = await fetch('http://localhost:8000/history/my', { headers: authHeaders() });
+    const list = await res.json().catch(() => []);
+    sessionListEl.innerHTML = '';
+    list.forEach(s => {
+      const div = document.createElement('div');
+      div.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
+      div.dataset.sid = s.id;
+
+      // 置顶图标
+      const pinIcon = document.createElement('span');
+      pinIcon.className = 'session-pin-icon';
+      pinIcon.textContent = s.pinned ? '📌' : '';
+
+      // 会话主体
+      const body = document.createElement('div');
+      body.className = 'session-item-body';
+
+      const titleEl = document.createElement('div');
+      titleEl.className = 'session-item-title';
+      titleEl.textContent = s.title || '（无标题）';
+
+      const metaEl = document.createElement('div');
+      metaEl.className = 'session-item-meta';
+      metaEl.textContent = `${s.created_at.slice(0,10)} · ${s.msg_count||0}条`;
+
+      body.appendChild(titleEl);
+      body.appendChild(metaEl);
+
+      // 三点菜单按钮
+      const moreBtn = document.createElement('button');
+      moreBtn.className = 'session-more-btn';
+      moreBtn.title = '更多操作';
+      moreBtn.textContent = '···';
+      moreBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        openSessionMenu(e, s, titleEl, div);
+      });
+
+      if (s.pinned) div.appendChild(pinIcon);
+      div.appendChild(body);
+      div.appendChild(moreBtn);
+
+      div.addEventListener('click', () => loadSession(s));
+      sessionListEl.appendChild(div);
+    });
+  } catch(e) {}
+}
+
+async function loadSession(s) {
+  try {
+    const res = await fetch(`http://localhost:8000/history/${s.id}`, { headers: authHeaders() });
+    const data = await res.json();
+    currentSessionId = s.id;
+    chatHistory = [];
+    messagesEl.innerHTML = '';
+    data.messages.forEach(m => {
+      const bubble = addBubble(m.role);
+      renderMessageContent(bubble, m.content);
+      if (m.role !== 'system') {
+        // 尝试解析 JSON 字符串（图片消息存为 JSON）
+        let c = m.content;
+        try { const p = JSON.parse(c); if (Array.isArray(p)) c = p; } catch {}
+        chatHistory.push({ role: m.role, content: c });
+      }
+    });
+    document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
+    [...sessionListEl.children].forEach(el => { if (el.dataset.sid == s.id) el.classList.add('active'); });
+  } catch(e) {}
+}
+
+// 渲染消息内容：纯文本直接显示，JSON 数组则解析出图片缩略图和文字
+function renderMessageContent(bubble, raw) {
+  let parsed;
+  try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { parsed = null; }
+
+  if (Array.isArray(parsed)) {
+    const imgs = parsed.filter(b => b.type === 'image' && b.source?.data);
+    const texts = parsed.filter(b => b.type === 'text').map(b => b.text).join('\n');
+
+    if (imgs.length) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px';
+      imgs.forEach(b => {
+        row.appendChild(makeThumb(`data:${b.source.media_type};base64,${b.source.data}`));
+      });
+      bubble.appendChild(row);
+    }
+    if (texts) {
+      const t = document.createElement('div');
+      t.style.whiteSpace = 'pre-wrap';
+      t.textContent = texts;
+      bubble.appendChild(t);
+    }
+    if (!imgs.length && !texts) bubble.textContent = raw; // fallback
+  } else {
+    bubble.textContent = typeof raw === 'string' ? raw : JSON.stringify(raw);
+  }
+}
+
+document.getElementById('newChatBtn').addEventListener('click', () => {
+  chatHistory = []; attachments = []; renderAttachments();
+  currentSessionId = null;
+  messagesEl.innerHTML = '<p class="empty-hint">发送消息开始对话</p>';
+  document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
+  userInput.focus();
+});
+
+// ── 会话下拉菜单 ──────────────────────────────────────────
+let _menuSession = null, _menuTitleEl = null, _menuDiv = null;
+const menu = document.getElementById('sessionMenu');
+
+function openSessionMenu(e, s, titleEl, div) {
+  _menuSession = s; _menuTitleEl = titleEl; _menuDiv = div;
+  // 更新置顶文案
+  document.getElementById('menuPin').textContent = s.pinned ? '📌 取消置顶' : '📍 置顶';
+  // 定位
+  const rect = e.currentTarget.getBoundingClientRect();
+  menu.style.top  = `${rect.bottom + 4}px`;
+  menu.style.left = `${Math.min(rect.left, window.innerWidth - 140)}px`;
+  menu.classList.add('open');
+  div.classList.add('menu-open');
+}
+
+function closeMenu() {
+  menu.classList.remove('open');
+  _menuDiv?.classList.remove('menu-open');
+}
+
+document.getElementById('menuPin').addEventListener('click', async () => {
+  closeMenu();
+  await fetch(`http://localhost:8000/sessions/${_menuSession.id}/pin`, { method: 'PUT', headers: authHeaders() });
+  loadSessions();
+});
+
+document.getElementById('menuRename').addEventListener('click', () => {
+  closeMenu();
+  startRename(_menuSession, _menuTitleEl);
+});
+
+document.getElementById('menuDelete').addEventListener('click', async () => {
+  closeMenu();
+  if (!confirm(`删除「${_menuSession.title || '无标题'}」？此操作不可撤销。`)) return;
+  await fetch(`http://localhost:8000/sessions/${_menuSession.id}`, { method: 'DELETE', headers: authHeaders() });
+  if (currentSessionId === _menuSession.id) {
+    currentSessionId = null; chatHistory = [];
+    messagesEl.innerHTML = '<p class="empty-hint">发送消息开始对话</p>';
+  }
+  loadSessions();
+});
+
+document.addEventListener('click', e => {
+  if (!menu.contains(e.target)) closeMenu();
+});
+
+// ── 图片放大灯箱 ──────────────────────────────────────────
+const lightbox    = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightboxImg');
+lightbox.addEventListener('click', () => lightbox.classList.remove('open'));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') lightbox.classList.remove('open'); });
+
+function openLightbox(src) {
+  lightboxImg.src = src;
+  lightbox.classList.add('open');
+}
+
+// 给图片元素绑定放大事件
+function makeThumb(src, style = 'width:80px;height:80px;object-fit:cover;border-radius:6px;cursor:zoom-in') {
+  const img = document.createElement('img');
+  img.src = src;
+  img.style.cssText = style;
+  img.addEventListener('click', e => { e.stopPropagation(); openLightbox(src); });
+  return img;
+}
+
+function startRename(s, titleEl) {
+  const inp = document.createElement('input');
+  inp.value = s.title || '';
+  inp.style.cssText = 'width:100%;font-size:.82rem;padding:1px 4px;border:1px solid var(--green);border-radius:3px;outline:none';
+  titleEl.replaceWith(inp);
+  inp.focus(); inp.select();
+  let committed = false;
+  const commit = async () => {
+    if (committed) return; committed = true;
+    const newTitle = inp.value.trim() || '（无标题）';
+    try {
+      await fetch(`http://localhost:8000/sessions/${s.id}/title`, {
+        method: 'PUT', headers: authHeaders(),
+        body: JSON.stringify({ title: newTitle }),
+      });
+      s.title = newTitle;
+    } catch {}
+    titleEl.textContent = s.title || '（无标题）';
+    inp.replaceWith(titleEl);
+    loadSessions();
+  };
+  inp.addEventListener('blur', commit);
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+    if (e.key === 'Escape') { committed = true; inp.replaceWith(titleEl); }
+  });
+}
+
+loadSessions();
+
+// ── 会话持久化 ────────────────────────────────────────────
 async function ensureSession(firstMessageText) {
   if (currentSessionId) return;
   try {
     const res = await fetch('http://localhost:8000/sessions', {
-      method: 'POST',
-      headers: authHeaders(),
+      method: 'POST', headers: authHeaders(),
       body: JSON.stringify({
         config_id: configSelect.value ? parseInt(configSelect.value) : null,
         model: modelSelect.value,
@@ -232,20 +682,20 @@ async function ensureSession(firstMessageText) {
     });
     const data = await res.json();
     currentSessionId = data.session_id;
-  } catch(e) { console.error('创建会话失败', e); }
+    loadSessions();
+  } catch(e) {}
 }
 
 async function saveMessage(role, content) {
   if (!currentSessionId) return;
   const text = typeof content === 'string' ? content : JSON.stringify(content);
   fetch('http://localhost:8000/sessions/messages', {
-    method: 'POST',
-    headers: authHeaders(),
+    method: 'POST', headers: authHeaders(),
     body: JSON.stringify({ session_id: currentSessionId, role, content: text }),
   }).catch(() => {});
 }
 
-// 已授权配置全量缓存
+// ── 配置选择 ──────────────────────────────────────────────
 let _approvedList = [];
 
 async function loadApprovedConfigs() {
@@ -253,52 +703,44 @@ async function loadApprovedConfigs() {
     const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
     _approvedList = await res.json();
     if (!_approvedList.length) {
-      providerSelect.innerHTML = '<option value="">— 暂无可用 API，请先申请 —</option>';
-      configSelect.innerHTML   = '<option value="">—</option>';
+      providerSelect.innerHTML = '<option value="">— 暂无可用 API —</option>';
+      configSelect.innerHTML = '<option value="">—</option>';
       setInputEnabled(false);
-      messagesEl.innerHTML = `<div class="no-api-hint">
-        <p>暂无可用 API</p>
-        <p><a href="apply.html">前往申请 →</a></p>
-      </div>`;
+      messagesEl.innerHTML = `<div class="no-api-hint"><p>暂无可用 API</p><p><a href="apply.html">前往申请 →</a></p></div>`;
       return;
     }
-    // 填充供应商（去重）
     const providers = [...new Set(_approvedList.map(c => c.provider))];
     providerSelect.innerHTML = '<option value="">— 请选择 —</option>' +
       providers.map(p => `<option value="${p}">${p}</option>`).join('');
     configSelect.innerHTML = '<option value="">— 请选择 —</option>';
-  } catch(e) { console.error(e); }
+  } catch(e) {}
 }
 
-// 供应商变化 → 筛选 API名称
 providerSelect.addEventListener('change', () => {
-  const p = providerSelect.value;
-  const filtered = _approvedList.filter(c => c.provider === p);
+  const filtered = _approvedList.filter(c => c.provider === providerSelect.value);
   configSelect.innerHTML = filtered.length
     ? '<option value="">— 请选择 —</option>' + filtered.map(c => `<option value="${c.id}">${c.name}</option>`).join('')
-    : '<option value="">— 暂无可用 —</option>';
+    : '<option value="">— 暂无 —</option>';
   modelSelect.innerHTML = '<option value="">— 请选择 —</option>';
 });
 
-// API名称变化 → 加载模型
 configSelect.addEventListener('change', () => loadModelsForConfig(configSelect.value));
 
 async function loadModelsForConfig(configId) {
   if (!configId) { modelSelect.innerHTML = '<option value="">— 请选择 —</option>'; return; }
   modelSelect.innerHTML = '<option value="">— 加载中 —</option>';
   try {
-    const res  = await fetch(`http://localhost:8000/configs/${configId}/models`);
+    const res = await fetch(`http://localhost:8000/configs/${configId}/models`);
     const data = await res.json();
     modelSelect.innerHTML = data.models?.length
       ? data.models.map(m => `<option value="${m}">${m}</option>`).join('')
-      : '<option value="">— 该配置暂无可用模型 —</option>';
-  } catch(e) {
-    modelSelect.innerHTML = '<option value="">— 加载失败 —</option>';
-  }
+      : '<option value="">— 暂无可用模型 —</option>';
+  } catch(e) { modelSelect.innerHTML = '<option value="">— 加载失败 —</option>'; }
 }
 
 loadApprovedConfigs();
 
+// ── 气泡 ──────────────────────────────────────────────────
 function addBubble(role, text = '') {
   const empty = messagesEl.querySelector('.empty-hint, .no-api-hint');
   if (empty) empty.remove();
@@ -310,20 +752,44 @@ function addBubble(role, text = '') {
   return div;
 }
 
-function addError(msg) {
+function addError(msg, showRetry = false) {
   const div = document.createElement('div');
   div.className = 'bubble bubble-error';
   div.textContent = msg;
+  if (showRetry) {
+    const btn = document.createElement('button');
+    btn.className = 'retry-btn'; btn.textContent = '重新生成';
+    btn.addEventListener('click', () => { div.remove(); retryLastMessage(); });
+    div.appendChild(document.createElement('br'));
+    div.appendChild(btn);
+  }
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+async function retryLastMessage() {
+  if (!chatHistory.length || chatHistory[chatHistory.length-1].role !== 'user') return;
+  setInputEnabled(false);
+  const bubble = addBubble('assistant');
+  bubble.classList.add('cursor');
+  let accumulated = '';
+  await streamChat({
+    messages: chatHistory, model: modelSelect.value, system: '',
+    config_id: parseInt(configSelect.value),
+    user_token: (await import('../assets/js/auth.js')).getToken(),
+    onToken(c) { accumulated += c; bubble.textContent = accumulated; messagesEl.scrollTop = messagesEl.scrollHeight; },
+    onDone() { bubble.classList.remove('cursor'); chatHistory.push({ role:'assistant', content:accumulated }); saveMessage('assistant', accumulated); setInputEnabled(true); userInput.focus(); },
+    onError(err) { bubble.remove(); addError(err, true); setInputEnabled(true); },
+  });
+}
+
+// ── 附件（图片缩略图 + 文件标签）────────────────────────
 function readFileAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result.split(',')[1]);
-    reader.onerror = () => reject(new Error(`文件读取失败：${file.name}`));
-    reader.readAsDataURL(file);
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.onerror = () => rej(new Error(`读取失败：${file.name}`));
+    r.readAsDataURL(file);
   });
 }
 
@@ -336,21 +802,35 @@ async function processFiles(files) {
       const base64 = await readFileAsBase64(file);
       attachments.push({ name: file.name, mimeType: file.type, base64 });
       renderAttachments();
-    } catch (err) { addError(err.message); }
+    } catch(err) { addError(err.message); }
   }
 }
 
 function renderAttachments() {
   attachmentsRow.innerHTML = '';
   attachments.forEach((att, i) => {
-    const icon = att.mimeType.startsWith('image/') ? '🖼️' : '📄';
-    const tag = document.createElement('div');
-    tag.className = 'attachment-tag';
-    const span = document.createElement('span'); span.textContent = `${icon} ${att.name}`;
-    const btn = document.createElement('button'); btn.textContent = '✕';
-    btn.addEventListener('click', () => { attachments.splice(i,1); renderAttachments(); });
-    tag.appendChild(span); tag.appendChild(btn);
-    attachmentsRow.appendChild(tag);
+    if (att.mimeType.startsWith('image/')) {
+      // 图片缩略图
+      const wrap = document.createElement('div');
+      wrap.className = 'thumb-wrap';
+      const img = document.createElement('img');
+      img.src = `data:${att.mimeType};base64,${att.base64}`;
+      img.alt = att.name;
+      const del = document.createElement('button');
+      del.className = 'thumb-del'; del.textContent = '×';
+      del.addEventListener('click', () => { attachments.splice(i,1); renderAttachments(); });
+      wrap.appendChild(img); wrap.appendChild(del);
+      attachmentsRow.appendChild(wrap);
+    } else {
+      // 文件标签
+      const tag = document.createElement('div');
+      tag.className = 'attachment-tag';
+      const span = document.createElement('span'); span.textContent = `📄 ${att.name}`;
+      const btn = document.createElement('button'); btn.textContent = '✕';
+      btn.addEventListener('click', () => { attachments.splice(i,1); renderAttachments(); });
+      tag.appendChild(span); tag.appendChild(btn);
+      attachmentsRow.appendChild(tag);
+    }
   });
 }
 
@@ -361,12 +841,13 @@ function setInputEnabled(enabled) {
   fileInput.disabled = !enabled;
 }
 
+// ── 发送 ──────────────────────────────────────────────────
 async function send() {
   const text = userInput.value.trim();
   if (!text && attachments.length === 0) return;
   if (!providerSelect.value) { addError('请先选择供应商'); return; }
-  if (!configSelect.value)  { addError('请选择 API 名称'); return; }
-  if (!modelSelect.value)   { addError('请选择模型'); return; }
+  if (!configSelect.value)   { addError('请选择 API 名称'); return; }
+  if (!modelSelect.value)    { addError('请选择模型'); return; }
 
   userInput.value = '';
   let content;
@@ -385,13 +866,31 @@ async function send() {
     }
   }
 
-  addBubble('user', text + (attachments.length > 0 ? `\n[📎 ${attachments.length} 个附件]` : ''));
-  history.push({ role:'user', content });
+  // 用户气泡（图片用缩略图展示在气泡内）
+  const userBubble = addBubble('user');
+  if (attachments.length > 0) {
+    const imgs = attachments.filter(a => a.mimeType.startsWith('image/'));
+    if (imgs.length) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px';
+      imgs.forEach(a => {
+        row.appendChild(makeThumb(`data:${a.mimeType};base64,${a.base64}`));
+      });
+      userBubble.appendChild(row);
+    }
+    if (text) {
+      const t = document.createElement('div'); t.textContent = text;
+      userBubble.appendChild(t);
+    }
+  } else {
+    userBubble.textContent = text;
+  }
+
+  chatHistory.push({ role:'user', content });
   attachments = []; renderAttachments();
 
-  // 创建会话（首条消息时）并保存用户消息
-  await ensureSession(text);
-  saveMessage('user', typeof content === 'string' ? content : text);
+  await ensureSession(text || '图片对话');
+  saveMessage('user', typeof content === 'string' ? content : JSON.stringify(content));
 
   setInputEnabled(false);
   const bubble = addBubble('assistant');
@@ -399,51 +898,322 @@ async function send() {
   let accumulated = '';
 
   await streamChat({
-    messages:   history,
-    model:      modelSelect.value,
-    system:     '',
-    config_id:  parseInt(configSelect.value),
+    messages: chatHistory, model: modelSelect.value, system: '',
+    config_id: parseInt(configSelect.value),
     user_token: (await import('../assets/js/auth.js')).getToken(),
-    onToken(chunk) {
-      accumulated += chunk;
-      bubble.textContent = accumulated;
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-    },
+    onToken(chunk) { accumulated += chunk; bubble.textContent = accumulated; messagesEl.scrollTop = messagesEl.scrollHeight; },
     onDone() {
       bubble.classList.remove('cursor');
-      history.push({ role:'assistant', content: accumulated });
+      chatHistory.push({ role:'assistant', content: accumulated });
       saveMessage('assistant', accumulated);
       setInputEnabled(true);
       userInput.focus();
-      // 保存结果到文件
-      const path = savePath.value.trim();
-      if (path && accumulated) {
-        fetch('http://localhost:8000/save-result', {
-          method: 'POST',
-          headers: { ...authHeaders() },
-          body: JSON.stringify({ path, content: accumulated }),
-        }).catch(() => {});
-      }
+      loadSessions();
     },
     onError(err) {
-      bubble.remove(); history.pop();
-      addError(err); setInputEnabled(true);
+      bubble.remove();
+      saveMessage('assistant', `[错误] ${err}`);
+      addError(err, true); setInputEnabled(true);
     },
   });
 }
 
 sendBtn.addEventListener('click', send);
 userInput.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
-clearBtn.addEventListener('click', () => {
-  history = []; attachments = []; renderAttachments();
-  currentSessionId = null;
-  messagesEl.innerHTML = '<p class="empty-hint">发送消息开始对话</p>';
-});
 attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => { processFiles([...fileInput.files]); fileInput.value=''; });
 messagesEl.addEventListener('dragover', e => { e.preventDefault(); messagesEl.classList.add('drag-over'); });
 messagesEl.addEventListener('dragleave', () => messagesEl.classList.remove('drag-over'));
 messagesEl.addEventListener('drop', e => { e.preventDefault(); messagesEl.classList.remove('drag-over'); processFiles([...e.dataTransfer.files]); });
+
+// ══════════════════════════════════════════════════════════
+// 脚本编辑器
+// ══════════════════════════════════════════════════════════
+(function initScriptEditor() {
+
+const TEMPLATE = `# 可用变量：
+#   df        — 已加载的 DataFrame（parquet/json/csv/excel）
+#   WORK_DIR  — 本次运行的独立工作目录
+#   AI_MODEL  — 当前选中的模型名
+#
+# 可用函数：
+#   chat(prompt, model=None)  → 调 AI，返回文本
+#   show_image(path)          → 在日志区显示图片
+#   show_chart(fig)           → 在日志区显示 matplotlib 图表
+#   show_video(path)          → 在日志区显示视频
+#   save_file(path)           → 加入结果文件列表
+
+import os
+import pandas as pd
+
+print(f"数据形状: {df.shape}")
+print(df.head())
+
+# 示例：批量调 AI
+# df["result"] = df["content"].apply(lambda x: chat(x))
+# output_path = os.path.join(WORK_DIR, "output.csv")
+# df.to_csv(output_path, index=False)
+# save_file(output_path)
+`;
+
+// ── Monaco 懒加载 ─────────────────────────────────────────
+let monacoEditor = null;
+
+function initMonaco() {
+  if (monacoEditor || !window.require) return;
+  require(['vs/editor/editor.main'], function () {
+    monacoEditor = monaco.editor.create(
+      document.getElementById('scriptEditorContainer'), {
+        value: TEMPLATE,
+        language: 'python',
+        theme: 'vs-dark',
+        fontSize: 13,
+        minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+        automaticLayout: true,
+        tabSize: 4,
+        insertSpaces: true,
+        wordWrap: 'on',
+      }
+    );
+  });
+}
+
+document.querySelector('.sub-tab[data-panel="script"]')
+  ?.addEventListener('click', () => {
+    setTimeout(initMonaco, 80);
+    if (!_scriptConfigs.length) loadScriptConfigs();
+  });
+
+// ── 文件上传 ──────────────────────────────────────────────
+let uploadedFileId = null;
+const sFileDrop  = document.getElementById('scriptFileDrop');
+const sFileInput = document.getElementById('scriptFileInput');
+const sFileInfo  = document.getElementById('scriptFileInfo');
+
+sFileDrop.addEventListener('click',     () => sFileInput.click());
+sFileDrop.addEventListener('dragover',  e  => { e.preventDefault(); sFileDrop.classList.add('dragover'); });
+sFileDrop.addEventListener('dragleave', ()  => sFileDrop.classList.remove('dragover'));
+sFileDrop.addEventListener('drop', e => {
+  e.preventDefault(); sFileDrop.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) uploadScriptFile(e.dataTransfer.files[0]);
+});
+sFileInput.addEventListener('change', () => {
+  if (sFileInput.files[0]) uploadScriptFile(sFileInput.files[0]);
+});
+document.getElementById('scriptFileClear').addEventListener('click', () => {
+  uploadedFileId = null;
+  sFileDrop.style.display = ''; sFileInfo.style.display = 'none'; sFileInput.value = '';
+});
+
+async function uploadScriptFile(file) {
+  sFileDrop.style.display = 'none'; sFileInfo.style.display = 'flex';
+  document.getElementById('scriptFileName').textContent = file.name;
+  const statsEl = document.getElementById('scriptFileStats');
+  statsEl.textContent = '上传中…'; statsEl.style.color = '';
+  const form = new FormData(); form.append('file', file);
+  try {
+    const { getToken } = await import('../assets/js/auth.js');
+    const res = await fetch('http://localhost:8000/script/upload', {
+      method: 'POST',
+      headers: { 'X-Token': getToken() || '' },
+      body: form,
+    });
+    if (!res.ok) { const d = await res.json(); throw new Error(d.detail); }
+    const d = await res.json();
+    uploadedFileId = d.file_id;
+    const colPreview = (d.col_names || []).slice(0, 4).join(', ');
+    statsEl.textContent = `${d.rows.toLocaleString()} 行 · ${d.columns} 列 (${colPreview}${d.columns > 4 ? '…' : ''})`;
+  } catch(e) {
+    statsEl.textContent = '上传失败：' + e.message;
+    statsEl.style.color = '#dc2626';
+  }
+}
+
+// ── 模型配置联动 ──────────────────────────────────────────
+let _scriptConfigs = [];
+
+async function loadScriptConfigs() {
+  const { authHeaders } = await import('../assets/js/auth.js');
+  const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
+  _scriptConfigs = await res.json().catch(() => []);
+  const providers = [...new Set(_scriptConfigs.map(c => c.provider))];
+  const pSel = document.getElementById('scriptProviderSel');
+  pSel.innerHTML = '<option value="">— 请选择 —</option>' +
+    providers.map(p => `<option value="${p}">${p}</option>`).join('');
+}
+
+document.getElementById('scriptProviderSel').addEventListener('change', e => {
+  const filtered = _scriptConfigs.filter(c => c.provider === e.target.value);
+  const cSel = document.getElementById('scriptConfigSel');
+  cSel.innerHTML = filtered.length
+    ? '<option value="">— 请选择 —</option>' + filtered.map(c => `<option value="${c.id}">${c.name}</option>`).join('')
+    : '<option value="">— 暂无 —</option>';
+  document.getElementById('scriptModelSel').innerHTML = '<option value="">— 请选择 —</option>';
+});
+
+document.getElementById('scriptConfigSel').addEventListener('change', async e => {
+  const id = e.target.value; if (!id) return;
+  const res = await fetch(`http://localhost:8000/configs/${id}/models`);
+  const data = await res.json().catch(() => ({ models: [] }));
+  const mSel = document.getElementById('scriptModelSel');
+  mSel.innerHTML = data.models?.length
+    ? data.models.map(m => `<option value="${m}">${m}</option>`).join('')
+    : '<option value="">— 暂无模型 —</option>';
+});
+
+// ── 输出 Tab 切换 ─────────────────────────────────────────
+document.querySelectorAll('.script-out-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.script-out-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.script-out-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    const id = 'scriptOut' + tab.dataset.out[0].toUpperCase() + tab.dataset.out.slice(1);
+    document.getElementById(id).classList.add('active');
+  });
+});
+
+// ── 运行 / 停止 / 清空 ────────────────────────────────────
+let _scriptRunId   = null;
+let _scriptFiles   = 0;
+let _scriptTimer   = null;
+let _scriptAbort   = null;
+
+document.getElementById('scriptRunBtn').addEventListener('click',  runScript);
+document.getElementById('scriptStopBtn').addEventListener('click', () => _scriptAbort?.abort());
+document.getElementById('scriptClearBtn').addEventListener('click', clearScriptOutput);
+
+function clearScriptOutput() {
+  document.getElementById('scriptLog').innerHTML =
+    '<span style="color:var(--text-muted);font-size:.82rem">运行后输出将显示在这里</span>';
+  document.getElementById('scriptResultFiles').innerHTML =
+    '<p style="color:var(--text-muted);font-size:.82rem;padding:16px">暂无结果文件</p>';
+  document.getElementById('scriptDownloadAll').style.display = 'none';
+  document.getElementById('scriptFileBadge').style.display   = 'none';
+  _scriptFiles = 0; _scriptRunId = null;
+}
+
+async function runScript() {
+  const code = monacoEditor?.getValue() ?? '';
+  if (!code.trim()) return;
+  const configId = document.getElementById('scriptConfigSel').value;
+  const model    = document.getElementById('scriptModelSel').value;
+  if (!configId || !model) { alert('请先选择 API 配置和模型'); return; }
+
+  document.querySelector('.script-out-tab[data-out="log"]').click();
+  clearScriptOutput();
+
+  monacoEditor?.updateOptions({ readOnly: true });
+  document.getElementById('scriptRunBtn').style.display  = 'none';
+  document.getElementById('scriptStopBtn').style.display = '';
+  let elapsed = 0;
+  const timerEl = document.getElementById('scriptTimer');
+  timerEl.textContent = '0s';
+  _scriptTimer = setInterval(() => { elapsed++; timerEl.textContent = elapsed + 's'; }, 1000);
+
+  const { getToken } = await import('../assets/js/auth.js');
+  _scriptAbort = new AbortController();
+
+  try {
+    const res = await fetch('http://localhost:8000/script/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Token': getToken() || '' },
+      body: JSON.stringify({ code, config_id: configId ? parseInt(configId) : null,
+                             model, file_id: uploadedFileId }),
+      signal: _scriptAbort.signal,
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      appendScriptLog('error', (d.detail || `HTTP ${res.status}`) + '\n');
+      return;
+    }
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try { handleScriptEvent(JSON.parse(line.slice(6))); } catch {}
+      }
+    }
+  } catch(e) {
+    if (e.name !== 'AbortError') appendScriptLog('error', '连接中断：' + e.message + '\n');
+    else appendScriptLog('info', '已手动停止\n');
+  } finally {
+    clearInterval(_scriptTimer);
+    monacoEditor?.updateOptions({ readOnly: false });
+    document.getElementById('scriptRunBtn').style.display  = '';
+    document.getElementById('scriptStopBtn').style.display = 'none';
+    timerEl.textContent = '';
+  }
+}
+
+function handleScriptEvent(ev) {
+  const logEl = document.getElementById('scriptLog');
+  switch(ev.type) {
+    case 'stdout': appendScriptLog('stdout', ev.text); break;
+    case 'stderr': appendScriptLog('stderr', ev.text); break;
+    case 'error':  appendScriptLog('error',  ev.text); break;
+    case 'info':   appendScriptLog('info',   ev.text); break;
+    case 'image': {
+      const img = document.createElement('img');
+      img.src = ev.data;
+      img.addEventListener('click', () => openLightbox(ev.data));
+      logEl.appendChild(img); logEl.scrollTop = logEl.scrollHeight; break;
+    }
+    case 'video': {
+      const vid = document.createElement('video');
+      vid.controls = true;
+      vid.src = `http://localhost:8000/script/result/${ev.run_id}/${ev.filename}`;
+      logEl.appendChild(vid); logEl.scrollTop = logEl.scrollHeight; break;
+    }
+    case 'file': {
+      _scriptRunId = ev.run_id; _scriptFiles++;
+      const badge = document.getElementById('scriptFileBadge');
+      badge.textContent = _scriptFiles; badge.style.display = '';
+      const filesEl = document.getElementById('scriptResultFiles');
+      if (filesEl.querySelector('p')) filesEl.innerHTML = '';
+      const sizeStr = ev.size > 1048576 ? (ev.size/1048576).toFixed(1)+' MB'
+                    : ev.size > 1024    ? (ev.size/1024).toFixed(1)+' KB'
+                    : ev.size + ' B';
+      const item = document.createElement('div');
+      item.className = 'result-file-item';
+      item.innerHTML = `<span class="file-name">📄 ${ev.name}</span>
+        <span class="file-size">${sizeStr}</span>
+        <a class="btn btn-secondary" style="padding:3px 10px;font-size:.78rem;text-decoration:none"
+           href="http://localhost:8000/script/result/${ev.run_id}/download"
+           download="result_${ev.run_id.slice(0,8)}.zip">↓</a>`;
+      filesEl.appendChild(item);
+      document.getElementById('scriptDownloadAll').style.display = '';
+      break;
+    }
+    case 'done': {
+      if (ev.run_id) _scriptRunId = ev.run_id;
+      appendScriptLog('info', `\n✅ 完成（${ev.elapsed}s，${ev.file_count} 个结果文件）\n`);
+      break;
+    }
+  }
+}
+
+function appendScriptLog(cls, text) {
+  const logEl = document.getElementById('scriptLog');
+  const hint = logEl.querySelector('[style]');
+  if (hint) hint.remove();
+  const span = document.createElement('span');
+  span.className = `log-${cls}`; span.textContent = text;
+  logEl.appendChild(span); logEl.scrollTop = logEl.scrollHeight;
+}
+
+document.getElementById('scriptDlAllBtn').addEventListener('click', () => {
+  if (_scriptRunId)
+    window.location.href = `http://localhost:8000/script/result/${_scriptRunId}/download`;
+});
+
+})(); // initScriptEditor
 </script>
 </body>
 </html>
