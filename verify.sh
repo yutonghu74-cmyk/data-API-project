@@ -17,8 +17,10 @@ sleep 3
 
 # 3. 健康检查 + 关键接口
 
-for path in "/health" "/admin/configs" "/admin/users"; do
+for path in "/health" "/admin/configs" "/admin/users" \
+            "/admin/accounts" "/admin/providers" "/admin/teams"; do
     code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8000$path")
+    # 401 也算"存在"(没带 token),只看 404 算"路由丢失"
     if [ "$code" = "404" ]; then
         echo "❌ $path -> 404 (路由丢失)"
         exit 1
