@@ -134,7 +134,48 @@
     </div>
   </div>
 </div>
-<!-- Modal B / C: Task 21 加入 -->
+<!-- Modal B: 新增/编辑子帐号 -->
+<div class="modal-bg" id="subModalBg">
+  <div class="modal">
+    <h3 id="subModalTitle">新增子帐号</h3>
+    <div class="form-group"><label>所属帐号</label>
+      <select id="sAccount" disabled></select></div>
+    <div class="form-group"><label>名称</label>
+      <input id="sName" placeholder="如 默认 / 项目A"></div>
+    <div class="form-group"><label>描述</label>
+      <input id="sDesc"></div>
+    <p id="sErr" style="color:#dc2626;font-size:.83rem;min-height:18px"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="subCancelBtn">取消</button>
+      <button class="btn btn-primary" id="subSaveBtn">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal C: 新增/编辑 API key -->
+<div class="modal-bg" id="keyModalBg">
+  <div class="modal">
+    <h3 id="keyModalTitle">新增 API key</h3>
+    <div class="form-group"><label>所属帐号</label>
+      <select id="kAccount"></select></div>
+    <div class="form-group">
+      <label>所属子帐号
+        <button type="button" id="kNewSubBtn" class="btn-icon"
+                style="font-size:.75rem;margin-left:8px">+ 新建</button>
+      </label>
+      <select id="kSub"></select>
+    </div>
+    <div class="form-group"><label>API 名称</label>
+      <input id="kName" placeholder="如 主key 1"></div>
+    <div class="form-group"><label>API key</label>
+      <textarea id="kKey" rows="2" placeholder="sk-..."></textarea></div>
+    <p id="kErr" style="color:#dc2626;font-size:.83rem;min-height:18px"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="keyCancelBtn">取消</button>
+      <button class="btn btn-primary" id="keySaveBtn">保存</button>
+    </div>
+  </div>
+</div>
 
 <script type="module">
 import { initSidebar } from '../assets/js/sidebar.js';
@@ -330,11 +371,183 @@ document.getElementById('acctSaveBtn').addEventListener('click', async () => {
   }
 });
 
-// ── Modal C 占位(Task 21 实现)─────────────────────────────
-function openKeyEdit(id) { alert('Modal C 待 Task 21 实现'); }
-async function onDelKey(id) { alert('删除 API 待 Task 21 实现'); }
-document.getElementById('addKeyBtn').addEventListener('click',
-  () => alert('+ 新增 API key 待 Task 21 实现'));
+// ── Modal B: 子帐号 ──────────────────────────────────────
+const subModalBg = document.getElementById('subModalBg');
+let editingSubId = null;
+let subModalContext = null; // {accountId, returnToKeyModal?}
+
+function openSubCreate(accountId, returnToKeyModal = false) {
+  editingSubId = null;
+  subModalContext = { accountId, returnToKeyModal };
+  document.getElementById('subModalTitle').textContent = '新增子帐号';
+  document.getElementById('sName').value = '';
+  document.getElementById('sDesc').value = '';
+  const accSel = document.getElementById('sAccount');
+  accSel.innerHTML = allAccounts.map(a =>
+    `<option value="${a.id}" ${a.id === accountId ? 'selected' : ''}>${esc(a.provider)} / ${esc(a.base_url)}</option>`
+  ).join('');
+  document.getElementById('sErr').textContent = '';
+  subModalBg.classList.add('open');
+}
+
+document.getElementById('subCancelBtn').addEventListener('click',
+  () => subModalBg.classList.remove('open'));
+subModalBg.addEventListener('click', e => {
+  if (e.target === subModalBg) subModalBg.classList.remove('open');
+});
+
+document.getElementById('subSaveBtn').addEventListener('click', async () => {
+  const errEl = document.getElementById('sErr');
+  errEl.textContent = '';
+  const accountId = parseInt(document.getElementById('sAccount').value);
+  const body = {
+    name: document.getElementById('sName').value.trim(),
+    description: document.getElementById('sDesc').value.trim(),
+  };
+  if (!body.name) { errEl.textContent = '名称不能为空'; return; }
+  try {
+    const newSub = editingSubId
+      ? await updateSubAccount(editingSubId, body)
+      : await createSubAccount(accountId, body);
+    subModalBg.classList.remove('open');
+    await loadAll();
+    if (subModalContext?.returnToKeyModal) {
+      keyModalBg.classList.add('open');
+      refreshKeyModalSubDropdown(accountId);
+      document.getElementById('kSub').value = newSub.id;
+    }
+  } catch (e) {
+    errEl.textContent = '保存失败:' + e.message;
+  }
+});
+
+// ── Modal C: API key ─────────────────────────────────────
+const keyModalBg = document.getElementById('keyModalBg');
+let editingKeyId = null;
+
+function refreshKeyModalSubDropdown(accountId) {
+  const sub = document.getElementById('kSub');
+  const subs = allSubAccounts[accountId] || [];
+  sub.innerHTML = subs.length
+    ? subs.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')
+    : '<option value="">— 暂无,请先新建 —</option>';
+}
+
+function openKeyCreate(presetSubId = null) {
+  editingKeyId = null;
+  document.getElementById('keyModalTitle').textContent = '新增 API key';
+  document.getElementById('kName').value = '';
+  document.getElementById('kKey').value = '';
+  document.getElementById('kErr').textContent = '';
+  document.getElementById('kAccount').disabled = false;
+  document.getElementById('kSub').disabled = false;
+  const accSel = document.getElementById('kAccount');
+  accSel.innerHTML = allAccounts.map(a =>
+    `<option value="${a.id}">${esc(a.provider)} / ${esc(a.base_url)}</option>`
+  ).join('');
+  if (presetSubId) {
+    for (const a of allAccounts) {
+      if ((allSubAccounts[a.id] || []).some(s => s.id === presetSubId)) {
+        accSel.value = a.id;
+        refreshKeyModalSubDropdown(a.id);
+        document.getElementById('kSub').value = presetSubId;
+        break;
+      }
+    }
+  } else if (allAccounts.length) {
+    refreshKeyModalSubDropdown(allAccounts[0].id);
+  }
+  keyModalBg.classList.add('open');
+}
+
+function openKeyEdit(keyId) {
+  let key = null, sub = null, acc = null;
+  for (const a of allAccounts) {
+    for (const s of allSubAccounts[a.id] || []) {
+      for (const k of allKeys[s.id] || []) {
+        if (k.id === keyId) { key = k; sub = s; acc = a; }
+      }
+    }
+  }
+  if (!key) return;
+  editingKeyId = keyId;
+  document.getElementById('keyModalTitle').textContent = '编辑 API key';
+  document.getElementById('kName').value = key.name;
+  document.getElementById('kKey').value = key.api_key;
+  document.getElementById('kErr').textContent = '';
+  const accSel = document.getElementById('kAccount');
+  accSel.innerHTML = `<option value="${acc.id}">${esc(acc.provider)} / ${esc(acc.base_url)}</option>`;
+  accSel.disabled = true;
+  refreshKeyModalSubDropdown(acc.id);
+  document.getElementById('kSub').value = sub.id;
+  document.getElementById('kSub').disabled = true;
+  keyModalBg.classList.add('open');
+}
+
+document.getElementById('kAccount').addEventListener('change', e => {
+  refreshKeyModalSubDropdown(parseInt(e.target.value));
+});
+document.getElementById('kNewSubBtn').addEventListener('click', () => {
+  const accId = parseInt(document.getElementById('kAccount').value);
+  if (!accId) return;
+  keyModalBg.classList.remove('open');
+  openSubCreate(accId, /*returnToKeyModal=*/true);
+});
+document.getElementById('keyCancelBtn').addEventListener('click', () => {
+  keyModalBg.classList.remove('open');
+  document.getElementById('kAccount').disabled = false;
+  document.getElementById('kSub').disabled = false;
+});
+keyModalBg.addEventListener('click', e => {
+  if (e.target === keyModalBg) {
+    keyModalBg.classList.remove('open');
+    document.getElementById('kAccount').disabled = false;
+    document.getElementById('kSub').disabled = false;
+  }
+});
+
+document.getElementById('keySaveBtn').addEventListener('click', async () => {
+  const errEl = document.getElementById('kErr');
+  errEl.textContent = '';
+  const subId = parseInt(document.getElementById('kSub').value);
+  const body = {
+    name: document.getElementById('kName').value.trim(),
+    api_key: document.getElementById('kKey').value.trim(),
+    is_active: 1, exhausted: 0,
+  };
+  if (!subId) { errEl.textContent = '请先选择或新建子帐号'; return; }
+  if (!body.name || !body.api_key) { errEl.textContent = '名称和 key 必填'; return; }
+  try {
+    if (editingKeyId) await updateApiKey(editingKeyId, body);
+    else await createApiKey(subId, body);
+    keyModalBg.classList.remove('open');
+    document.getElementById('kAccount').disabled = false;
+    document.getElementById('kSub').disabled = false;
+    await loadAll();
+  } catch (e) {
+    if ((e.message || '').includes('已存在')) {
+      errEl.textContent = '已存在(同 provider + 同 key)';
+    } else {
+      errEl.textContent = '保存失败:' + e.message;
+    }
+  }
+});
+
+async function onDelKey(keyId) {
+  if (!confirm('确认删除此 API key?')) return;
+  try {
+    await deleteApiKey(keyId);
+    await loadAll();
+  } catch (e) {
+    if ((e.message || '').includes('调用')) {
+      alert('该 key 已被调用,不能删除');
+    } else {
+      alert('删除失败:' + e.message);
+    }
+  }
+}
+
+document.getElementById('addKeyBtn').addEventListener('click', () => openKeyCreate());
 
 // ── 列筛选占位(Task 22 实现)──────────────────────────────
 async function refreshFilterDropdowns() {}
