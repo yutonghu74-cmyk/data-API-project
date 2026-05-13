@@ -131,18 +131,44 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        # Spec 1 三层结构(accounts → sub_accounts → api_keys)
+        # 生产中由 migrations/v1_account_schema.py 创建;tests 用 init_db 兜底
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider             TEXT NOT NULL,
+                base_url             TEXT NOT NULL,
+                provider_backend_url TEXT DEFAULT '',
+                quota_total_path     TEXT DEFAULT '',
+                balance_path         TEXT DEFAULT '',
+                cost_path            TEXT DEFAULT '',
+                manager_user_id      INTEGER REFERENCES users(id),
+                team                 TEXT DEFAULT '',
+                created_by           INTEGER NOT NULL REFERENCES users(id),
+                models               TEXT DEFAULT '',
+                is_active            INTEGER DEFAULT 1,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
+            )
+        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sub_accounts (
-                id                INTEGER PRIMARY KEY AUTOINCREMENT,
-                config_id         INTEGER REFERENCES api_configs(id),
-                name              TEXT NOT NULL,
-                description       TEXT DEFAULT '',
-                available_models  TEXT DEFAULT '',
-                quota_type        TEXT DEFAULT 'unlimited',
-                quota_amount      REAL DEFAULT 0,
-                ip_restriction    TEXT DEFAULT '',
-                is_active         INTEGER DEFAULT 1,
-                created_at        TEXT NOT NULL
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                name        TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                created_at  TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id              INTEGER PRIMARY KEY,
+                sub_account_id  INTEGER NOT NULL REFERENCES sub_accounts(id) ON DELETE RESTRICT,
+                name            TEXT NOT NULL,
+                api_key         TEXT NOT NULL,
+                is_active       INTEGER DEFAULT 1,
+                exhausted       INTEGER DEFAULT 0,
+                created_at      TEXT NOT NULL
             )
         """)
         # chat_sessions 兼容添加 pinned 字段
@@ -527,6 +553,45 @@ class ApiKeyIn(BaseModel):
     api_key: str
     is_active: int = 1
     exhausted: int = 0
+
+
+@app.get("/admin/accounts")
+def list_accounts(x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    where_sql, where_params = visibility_filter(user)
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT a.*,
+                   u_mgr.username AS manager_username,
+                   u_cb.username  AS creator_username
+            FROM accounts a
+            LEFT JOIN users u_mgr ON u_mgr.id = a.manager_user_id
+            LEFT JOIN users u_cb  ON u_cb.id  = a.created_by
+            WHERE {where_sql}
+            ORDER BY a.id DESC
+        """, where_params).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.post("/admin/accounts")
+def create_account(body: AccountIn, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute("""
+            INSERT INTO accounts
+              (provider, base_url, provider_backend_url, quota_total_path,
+               balance_path, cost_path, manager_user_id, team, created_by,
+               models, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (body.provider, body.base_url, body.provider_backend_url,
+              body.quota_total_path, body.balance_path, body.cost_path,
+              body.manager_user_id, body.team, user["id"], body.models,
+              body.is_active, now, now))
+        conn.commit()
+        row = conn.execute("SELECT * FROM accounts WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
 
 # ── Admin: configs ────────────────────────────────────────
 

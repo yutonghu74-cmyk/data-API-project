@@ -111,3 +111,78 @@ class TestCreateConfig:
         assert data["provider"] == self._payload["provider"]
         # API key is masked in response
         assert "****" in data["api_key"]
+
+
+# ── Spec 1 新端点测试 ────────────────────────────────────
+
+@pytest.fixture
+def db_with_users(client):
+    """在 client fixture 的 DB 上插入 admin + 2 个 user。返回他们的 token。
+    每次 fixture 调用清干净 spec1 相关表 + 'a'/'b'/'c' 用户。"""
+    with server.get_db() as conn:
+        for t in ("api_keys", "sub_accounts", "accounts"):
+            try: conn.execute(f"DELETE FROM {t}")
+            except Exception: pass
+        conn.execute("DELETE FROM user_tokens WHERE token LIKE 'tok-%'")
+        conn.execute("DELETE FROM users WHERE username IN ('a','b','c')")
+        conn.commit()
+        now = "2026-01-01"
+        for uname, role in [("a", "admin"), ("b", "user"), ("c", "user")]:
+            conn.execute(
+                "INSERT INTO users (username, password, role, created_at) VALUES (?, ?, ?, ?)",
+                (uname, "x", role, now),
+            )
+        conn.commit()
+        users = {
+            r["username"]: r["id"]
+            for r in conn.execute(
+                "SELECT id, username FROM users WHERE username IN ('a','b','c')"
+            ).fetchall()
+        }
+        tokens = {}
+        for uname, uid in users.items():
+            tok = f"tok-{uname}"
+            conn.execute(
+                "INSERT INTO user_tokens (user_id, token, created_at) VALUES (?, ?, ?)",
+                (uid, tok, now),
+            )
+            tokens[uname] = tok
+        conn.commit()
+    return {"ids": users, "tokens": tokens}
+
+
+def auth(token):
+    return {"X-Token": token}
+
+
+class TestGetAccounts:
+    def test_no_token_401(self, client):
+        r = client.get("/admin/accounts")
+        assert r.status_code == 401
+
+    def test_admin_sees_all(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        r = client.post("/admin/accounts", headers=auth(toks["b"]),
+                        json={"provider": "p1", "base_url": "http://x"})
+        assert r.status_code == 200
+        r = client.get("/admin/accounts", headers=auth(toks["a"]))
+        assert r.status_code == 200
+        assert len(r.json()) == 1
+
+    def test_user_only_sees_own(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        client.post("/admin/accounts", headers=auth(toks["b"]),
+                    json={"provider": "p1", "base_url": "http://x"})
+        r = client.get("/admin/accounts", headers=auth(toks["c"]))
+        assert r.json() == []
+        r = client.get("/admin/accounts", headers=auth(toks["b"]))
+        assert len(r.json()) == 1
+
+    def test_manager_can_see(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        ids = db_with_users["ids"]
+        client.post("/admin/accounts", headers=auth(toks["b"]),
+                    json={"provider": "p1", "base_url": "http://x",
+                          "manager_user_id": ids["c"]})
+        r = client.get("/admin/accounts", headers=auth(toks["c"]))
+        assert len(r.json()) == 1
