@@ -87,6 +87,28 @@ LEFT JOIN users u   ON u.id = a.manager_user_id;
 """
 
 
+def is_already_migrated(conn: sqlite3.Connection) -> bool:
+    """api_configs 已经是 VIEW → True"""
+    row = conn.execute(
+        "SELECT type FROM sqlite_master WHERE name='api_configs'"
+    ).fetchone()
+    return bool(row and row[0] == "view")
+
+
+def detect_partial_state(conn: sqlite3.Connection) -> str | None:
+    """检测半成品:返回错误描述或 None。"""
+    has_accounts = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='accounts'"
+    ).fetchone() is not None
+    configs_type_row = conn.execute(
+        "SELECT type FROM sqlite_master WHERE name='api_configs'"
+    ).fetchone()
+    configs_is_table = configs_type_row and configs_type_row[0] == "table"
+    if has_accounts and configs_is_table:
+        return "accounts 表存在但 api_configs 仍是表 — 上次迁移失败一半"
+    return None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
