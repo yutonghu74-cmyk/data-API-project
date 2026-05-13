@@ -234,3 +234,49 @@ class TestUpdateDeleteAccounts:
                 "SELECT COUNT(*) FROM sub_accounts WHERE account_id=?", (aid,)
             ).fetchone()[0]
             assert n == 0
+
+
+class TestSubAccounts:
+    def test_create_sub_account(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        r = client.post("/admin/accounts", headers=auth(toks["b"]),
+                        json={"provider": "p1", "base_url": "http://x"})
+        aid = r.json()["id"]
+        r = client.post(f"/admin/accounts/{aid}/sub-accounts",
+                        headers=auth(toks["b"]),
+                        json={"name": "S1", "description": "d"})
+        assert r.status_code == 200
+        assert r.json()["name"] == "S1"
+
+    def test_list_sub_accounts(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        r = client.post("/admin/accounts", headers=auth(toks["b"]),
+                        json={"provider": "p1", "base_url": "http://x"})
+        aid = r.json()["id"]
+        for n in ("S1", "S2"):
+            client.post(f"/admin/accounts/{aid}/sub-accounts",
+                        headers=auth(toks["b"]), json={"name": n})
+        r = client.get(f"/admin/accounts/{aid}/sub-accounts",
+                       headers=auth(toks["b"]))
+        assert len(r.json()) == 2
+
+    def test_update_sub_account(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        r = client.post("/admin/accounts", headers=auth(toks["b"]),
+                        json={"provider": "p1", "base_url": "http://x"})
+        aid = r.json()["id"]
+        r = client.post(f"/admin/accounts/{aid}/sub-accounts",
+                        headers=auth(toks["b"]), json={"name": "S1"})
+        sid = r.json()["id"]
+        r = client.put(f"/admin/sub-accounts/{sid}", headers=auth(toks["b"]),
+                       json={"name": "S1-renamed"})
+        assert r.json()["name"] == "S1-renamed"
+
+    def test_other_user_cannot_create_in_my_account(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        r = client.post("/admin/accounts", headers=auth(toks["b"]),
+                        json={"provider": "p1", "base_url": "http://x"})
+        aid = r.json()["id"]
+        r = client.post(f"/admin/accounts/{aid}/sub-accounts",
+                        headers=auth(toks["c"]), json={"name": "S1"})
+        assert r.status_code == 403

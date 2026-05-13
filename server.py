@@ -645,6 +645,92 @@ def delete_account(account_id: int, x_token: str = Header(default="")):
     return
 
 
+# ── Admin: sub-accounts ───────────────────────────────────
+
+@app.get("/admin/accounts/{account_id}/sub-accounts")
+def list_sub_accounts_new(account_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        acc = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+        if not acc:
+            raise HTTPException(404, "不存在")
+        if user["role"] != "admin":
+            if acc["created_by"] != user["id"] and acc["manager_user_id"] != user["id"]:
+                raise HTTPException(403, "无权访问")
+        rows = conn.execute(
+            "SELECT * FROM sub_accounts WHERE account_id=? ORDER BY id DESC",
+            (account_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.post("/admin/accounts/{account_id}/sub-accounts")
+def create_sub_account_new(account_id: int, body: SubAccountIn,
+                            x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        acc = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+        if not acc:
+            raise HTTPException(404, "不存在")
+        require_owner_or_admin(user, acc)
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            "INSERT INTO sub_accounts (account_id, name, description, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (account_id, body.name, body.description, now),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM sub_accounts WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def _get_sub_account_or_404(conn, sub_id: int):
+    row = conn.execute("""
+        SELECT s.*, a.created_by AS account_created_by,
+               a.manager_user_id AS account_manager,
+               a.provider AS account_provider
+        FROM sub_accounts s JOIN accounts a ON a.id = s.account_id
+        WHERE s.id = ?
+    """, (sub_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "子帐号不存在")
+    return row
+
+
+@app.put("/admin/sub-accounts/{sub_id}")
+def update_sub_account_new(sub_id: int, body: SubAccountIn,
+                            x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        sub = _get_sub_account_or_404(conn, sub_id)
+        if user["role"] != "admin" and sub["account_created_by"] != user["id"]:
+            raise HTTPException(403, "无权操作")
+        conn.execute(
+            "UPDATE sub_accounts SET name=?, description=? WHERE id=?",
+            (body.name, body.description, sub_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM sub_accounts WHERE id=?", (sub_id,)).fetchone()
+    return dict(row)
+
+
+@app.delete("/admin/sub-accounts/{sub_id}", status_code=204)
+def delete_sub_account_new(sub_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        sub = _get_sub_account_or_404(conn, sub_id)
+        if user["role"] != "admin" and sub["account_created_by"] != user["id"]:
+            raise HTTPException(403, "无权操作")
+        has_keys = conn.execute(
+            "SELECT 1 FROM api_keys WHERE sub_account_id=? LIMIT 1", (sub_id,)
+        ).fetchone()
+        if has_keys:
+            raise HTTPException(400, "子帐号下有 API key,不能删除")
+        conn.execute("DELETE FROM sub_accounts WHERE id=?", (sub_id,))
+        conn.commit()
+    return
+
+
 # ── Admin: configs ────────────────────────────────────────
 
 class ConfigIn(BaseModel):
