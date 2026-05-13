@@ -409,3 +409,14 @@ class TestProvidersAndTeams:
                     json={"provider": "only-b-sees", "base_url": "http://x"})
         r = client.get("/admin/providers", headers=auth(toks["c"]))
         assert "only-b-sees" not in r.json()
+
+
+class TestFetchModels:
+    def test_account_fetch_models_no_key_400(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        r = client.post("/admin/accounts", headers=auth(toks["b"]),
+                        json={"provider": "p", "base_url": "http://nope.invalid"})
+        aid = r.json()["id"]
+        r = client.get(f"/admin/accounts/{aid}/fetch-models", headers=auth(toks["b"]))
+        assert r.status_code == 400
+        assert "没有可用 key" in r.json()["detail"]

@@ -342,44 +342,71 @@ def health():
 def models():
     return {"models": MODELS}
 
-@app.get("/admin/configs/{config_id}/fetch-models")
-def fetch_models_from_provider(config_id: int, x_admin_password: str = Header(default="")):
-    """从供应商 /v1/models 接口拉取真实可用的模型列表。"""
-    require_admin(x_admin_password)
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT api_key, base_url, provider FROM api_configs WHERE id=?", (config_id,)
-        ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="配置不存在")
-
-    base_url = (row["base_url"] or "").rstrip("/")
+def _fetch_models_for_key(api_key: str, base_url: str):
+    """共用逻辑:用一个 key 调供应商 /v1/models。返回排序后的列表或 raise。"""
+    import httpx
+    base_url = (base_url or "").rstrip("/")
     if not base_url.endswith("/v1"):
         base_url = base_url + "/v1"
-
     try:
-        import httpx
         resp = httpx.get(
             f"{base_url}/models",
-            headers={"Authorization": f"Bearer {row['api_key']}"},
+            headers={"Authorization": f"Bearer {api_key}"},
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
         models = []
-        # OpenAI 格式: {"data": [{"id": "..."}]}
         if isinstance(data, dict) and "data" in data:
             models = [m["id"] for m in data["data"] if isinstance(m, dict) and "id" in m]
-        # {"models": [...]}
         elif isinstance(data, dict) and "models" in data:
             raw = data["models"]
             models = [m["id"] if isinstance(m, dict) else str(m) for m in raw]
-        # 纯列表
         elif isinstance(data, list):
             models = [m["id"] if isinstance(m, dict) else str(m) for m in data]
-        return {"models": sorted(models), "empty": not models}
+        return sorted(models)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"无法连接供应商：{e}")
+        raise HTTPException(status_code=502, detail=f"无法连接供应商:{e}")
+
+
+@app.get("/admin/configs/{config_id}/fetch-models")
+def fetch_models_legacy(config_id: int, x_admin_password: str = Header(default="")):
+    """旧路径,config_id 现等于 api_keys.id。"""
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT k.api_key, a.base_url "
+            "FROM api_keys k JOIN sub_accounts s ON s.id=k.sub_account_id "
+            "JOIN accounts a ON a.id=s.account_id WHERE k.id=?",
+            (config_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "配置不存在")
+    models = _fetch_models_for_key(row["api_key"], row["base_url"])
+    return {"models": models, "empty": not models}
+
+
+@app.get("/admin/accounts/{account_id}/fetch-models")
+def fetch_models_for_account(account_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        acc = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+        if not acc:
+            raise HTTPException(404, "帐号不存在")
+        if user["role"] != "admin" and acc["created_by"] != user["id"]:
+            raise HTTPException(403, "无权操作")
+        key_row = conn.execute("""
+            SELECT k.api_key FROM api_keys k
+            JOIN sub_accounts s ON s.id = k.sub_account_id
+            WHERE s.account_id = ? AND k.is_active = 1
+            ORDER BY k.id DESC LIMIT 1
+        """, (account_id,)).fetchone()
+    if not key_row:
+        raise HTTPException(400, "该帐号下没有可用 key,无法拉取模型")
+    models = _fetch_models_for_key(key_row["api_key"], acc["base_url"])
+    return {"models": models, "empty": not models}
 
 @app.get("/configs/{config_id}/models")
 def config_models(config_id: int):
