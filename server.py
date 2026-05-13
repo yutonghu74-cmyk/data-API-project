@@ -10,7 +10,8 @@ load_dotenv()
 import asyncio
 from fastapi import FastAPI, HTTPException, Header, UploadFile, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Literal
 import sqlite3
@@ -502,6 +503,30 @@ async def chat(req: ChatRequest):
                     pass
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+# ── Admin: accounts (Spec 1 三层结构) ─────────────────────
+
+class AccountIn(BaseModel):
+    provider: str
+    base_url: str
+    provider_backend_url: str = ""
+    quota_total_path: str = ""
+    balance_path: str = ""
+    cost_path: str = ""
+    manager_user_id: int | None = None
+    team: str = ""
+    models: str = ""
+    is_active: int = 1
+
+class SubAccountIn(BaseModel):
+    name: str
+    description: str = ""
+
+class ApiKeyIn(BaseModel):
+    name: str
+    api_key: str
+    is_active: int = 1
+    exhausted: int = 0
 
 # ── Admin: configs ────────────────────────────────────────
 
@@ -1507,6 +1532,22 @@ def _start_cleanup_thread():
     t.start()
 
 _start_cleanup_thread()
+
+# ── 静态文件服务（让前端可通过 http://localhost:8000/ 访问）──
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+app.mount("/assets", StaticFiles(directory=os.path.join(_ROOT, "assets")), name="assets")
+app.mount("/pages",  StaticFiles(directory=os.path.join(_ROOT, "pages")),  name="pages")
+app.mount("/config", StaticFiles(directory=os.path.join(_ROOT, "config")), name="config")
+if os.path.isdir(os.path.join(_ROOT, "src")):
+    app.mount("/src", StaticFiles(directory=os.path.join(_ROOT, "src")), name="src")
+
+@app.get("/")
+def serve_index():
+    return FileResponse(os.path.join(_ROOT, "index.html"))
+
+@app.get("/index.html")
+def serve_index_explicit():
+    return FileResponse(os.path.join(_ROOT, "index.html"))
 
 if __name__ == "__main__":
     import uvicorn
