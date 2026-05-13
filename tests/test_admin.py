@@ -409,3 +409,57 @@ class TestFetchModels:
         r = client.get(f"/admin/accounts/{aid}/fetch-models", headers=auth(toks["b"]))
         assert r.status_code == 400
         assert "没有可用 key" in r.json()["detail"]
+
+
+class TestBridgeViewCompat:
+    """通过新 API 创建,旧 GET 端点(VIEW)能读到。"""
+
+    @pytest.fixture
+    def db_with_view(self, client, db_with_users):
+        """把测试 DB 的 api_configs 表换成 VIEW。"""
+        with server.get_db() as conn:
+            r = conn.execute(
+                "SELECT type FROM sqlite_master WHERE name='api_configs'"
+            ).fetchone()
+            if r and r["type"] == "table":
+                conn.execute("DROP TABLE api_configs")
+                conn.executescript("""
+                    CREATE VIEW api_configs AS
+                    SELECT
+                      k.id AS id, k.name AS name, k.api_key AS api_key,
+                      a.provider AS provider, a.base_url AS base_url, a.models AS models,
+                      COALESCE(u.username, '') AS manager,
+                      0 AS price_input, 0 AS price_output,
+                      '' AS sub_account_name,
+                      k.is_active AS is_active,
+                      k.created_at AS created_at, k.created_at AS updated_at
+                    FROM api_keys k
+                    JOIN sub_accounts s ON s.id = k.sub_account_id
+                    JOIN accounts a     ON a.id = s.account_id
+                    LEFT JOIN users u   ON u.id = a.manager_user_id
+                """)
+                conn.commit()
+        return db_with_users
+
+    def test_admin_configs_select_via_view(self, client, db_with_view):
+        toks = db_with_view["tokens"]
+        r = client.post("/admin/accounts", headers=auth(toks["a"]),
+                        json={"provider": "测试", "base_url": "http://x"})
+        aid = r.json()["id"]
+        r = client.post(f"/admin/accounts/{aid}/sub-accounts",
+                        headers=auth(toks["a"]), json={"name": "默认"})
+        sid = r.json()["id"]
+        r = client.post(f"/admin/sub-accounts/{sid}/api-keys",
+                        headers=auth(toks["a"]),
+                        json={"name": "k1", "api_key": "sk-via-view"})
+        kid = r.json()["id"]
+
+        # 旧端点(x-admin-password)能拿到
+        r = client.get("/admin/configs", headers=GOOD)
+        assert r.status_code == 200
+        names = {c["name"] for c in r.json()}
+        assert "k1" in names
+
+        # /configs/{id}/models 不需要 auth,id = api_key.id 仍指向新数据
+        r = client.get(f"/configs/{kid}/models")
+        assert r.status_code == 200
