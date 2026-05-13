@@ -162,3 +162,52 @@ class TestDoMigrate:
             "SELECT type FROM sqlite_master WHERE name='api_configs'"
         ).fetchone()
         assert row[0] == "view"
+
+
+class TestMigrationIdempotencyAndVerify:
+    def test_rerun_is_noop(self, seeded_db):
+        mig.do_migrate(seeded_db)
+        # 跑第二遍不应该抛异常
+        mig.do_migrate(seeded_db)
+        conn = sqlite3.connect(seeded_db)
+        assert conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 3
+
+    def test_bridge_view_returns_expected_columns(self, seeded_db):
+        mig.do_migrate(seeded_db)
+        conn = sqlite3.connect(seeded_db)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM api_configs WHERE id=1").fetchone()
+        cols = row.keys()
+        for c in ("id", "name", "api_key", "provider", "base_url", "models",
+                  "manager", "price_input", "price_output", "sub_account_name",
+                  "is_active", "created_at", "updated_at"):
+            assert c in cols, f"VIEW 缺列: {c}"
+        assert row["name"] == "testv01"
+        assert row["api_key"] == "sk-aaa"
+        assert row["price_input"] == 0
+        assert row["price_output"] == 0
+
+    def test_partial_state_raises(self, fresh_db):
+        # 模拟半成品:accounts 存在但 api_configs 还是表
+        conn = sqlite3.connect(fresh_db)
+        conn.execute("CREATE TABLE accounts (id INTEGER)")
+        conn.commit()
+        conn.close()
+        with pytest.raises(RuntimeError, match="半成品|半"):
+            mig.do_migrate(fresh_db)
+
+    def test_api_requests_config_id_still_resolves(self, seeded_db):
+        # 插入一个 api_requests 引用 config_id=1
+        conn = sqlite3.connect(seeded_db)
+        conn.execute("""CREATE TABLE api_requests (
+            id INTEGER PRIMARY KEY, config_id INTEGER, status TEXT DEFAULT 'pending'
+        )""")
+        conn.execute("INSERT INTO api_requests (id, config_id, status) VALUES (10, 1, 'approved')")
+        conn.commit()
+        conn.close()
+        mig.do_migrate(seeded_db)
+        conn = sqlite3.connect(seeded_db)
+        row = conn.execute(
+            "SELECT c.name FROM api_requests r JOIN api_configs c ON c.id=r.config_id WHERE r.id=10"
+        ).fetchone()
+        assert row[0] == "testv01"
