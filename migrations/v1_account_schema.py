@@ -128,6 +128,76 @@ def precheck_admin_user(conn: sqlite3.Connection) -> int:
     return row[0]
 
 
+def do_migrate(db_path: str) -> None:
+    """执行真正的迁移。已迁移则 no-op;半成品则 raise。"""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    if is_already_migrated(conn):
+        conn.close()
+        return  # idempotent
+
+    partial = detect_partial_state(conn)
+    if partial:
+        conn.close()
+        raise RuntimeError(partial)
+
+    admin_id = precheck_admin_user(conn)
+    old_rows = conn.execute("SELECT * FROM api_configs ORDER BY id").fetchall()
+
+    try:
+        conn.execute("BEGIN")
+        conn.execute("PRAGMA foreign_keys = OFF")
+
+        conn.executescript(DDL_ACCOUNTS)
+        conn.executescript(DDL_SUB_ACCOUNTS)
+        conn.executescript(DDL_API_KEYS)
+
+        for r in old_rows:
+            mgr_username = r["manager"] or ""
+            mgr_row = conn.execute(
+                "SELECT id FROM users WHERE username=?", (mgr_username,)
+            ).fetchone()
+            mgr_id = mgr_row[0] if mgr_row else None
+
+            now = r["updated_at"] or r["created_at"]
+            cur = conn.execute(
+                """INSERT INTO accounts
+                   (provider, base_url, manager_user_id, created_by,
+                    models, is_active, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (r["provider"], r["base_url"], mgr_id, admin_id,
+                 r["models"] or "", r["is_active"], r["created_at"], now),
+            )
+            account_id = cur.lastrowid
+
+            cur = conn.execute(
+                """INSERT INTO sub_accounts (account_id, name, description, created_at)
+                   VALUES (?, '默认', '', ?)""",
+                (account_id, r["created_at"]),
+            )
+            sub_id = cur.lastrowid
+
+            # 显式 id 保留(供 api_requests / usage_stats / chat_sessions 继续指向)
+            conn.execute(
+                """INSERT INTO api_keys
+                   (id, sub_account_id, name, api_key, is_active, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (r["id"], sub_id, r["name"], r["api_key"],
+                 r["is_active"], r["created_at"]),
+            )
+
+        conn.execute("DROP TABLE api_configs")
+        conn.executescript(VIEW_SQL)
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")

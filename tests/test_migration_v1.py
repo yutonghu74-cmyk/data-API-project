@@ -82,3 +82,83 @@ class TestBackupAndPrecheck:
         conn.commit()
         with pytest.raises(RuntimeError, match="role='admin'"):
             mig.precheck_admin_user(conn)
+
+
+@pytest.fixture
+def seeded_db(fresh_db):
+    """fresh_db 基础上塞 3 行 api_configs。"""
+    conn = sqlite3.connect(fresh_db)
+    conn.executemany(
+        "INSERT INTO api_configs (id, name, base_url, api_key, provider, models, manager, is_active, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 1, '2026-01-01', '2026-01-01')",
+        [
+            (1, "testv01", "https://yibuapi.com/v1", "sk-aaa", "一步", "gemini", ""),
+            (2, "testv02", "yutongtong",             "sk-bbb", "yibu", "",       "胡宇彤"),
+            (3, "testv03", "yutongtong",             "sk-ccc", "一步", "",       "hytt"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    return fresh_db
+
+
+class TestDoMigrate:
+    def test_migrate_creates_three_accounts(self, seeded_db):
+        mig.do_migrate(seeded_db)
+        conn = sqlite3.connect(seeded_db)
+        n = conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
+        assert n == 3
+
+    def test_migrate_preserves_api_key_ids(self, seeded_db):
+        mig.do_migrate(seeded_db)
+        conn = sqlite3.connect(seeded_db)
+        rows = conn.execute(
+            "SELECT id, name, api_key FROM api_keys ORDER BY id"
+        ).fetchall()
+        assert rows == [
+            (1, "testv01", "sk-aaa"),
+            (2, "testv02", "sk-bbb"),
+            (3, "testv03", "sk-ccc"),
+        ]
+
+    def test_migrate_creates_default_sub_accounts(self, seeded_db):
+        mig.do_migrate(seeded_db)
+        conn = sqlite3.connect(seeded_db)
+        rows = conn.execute(
+            "SELECT account_id, name FROM sub_accounts ORDER BY account_id"
+        ).fetchall()
+        assert rows == [(1, "默认"), (2, "默认"), (3, "默认")]
+
+    def test_migrate_manager_username_match_becomes_fk(self, seeded_db):
+        # 加一个 username='胡宇彤' 的用户
+        conn = sqlite3.connect(seeded_db)
+        conn.execute(
+            "INSERT INTO users (username, password, role, created_at) "
+            "VALUES ('胡宇彤','x','user','2026-01-01')"
+        )
+        conn.commit()
+        conn.close()
+        mig.do_migrate(seeded_db)
+        conn = sqlite3.connect(seeded_db)
+        row = conn.execute(
+            "SELECT manager_user_id FROM accounts WHERE provider='yibu'"
+        ).fetchone()
+        # 胡宇彤 的 user id 是 2(admin=1, 胡宇彤=2)
+        assert row[0] == 2
+
+    def test_migrate_manager_not_in_users_becomes_null(self, seeded_db):
+        mig.do_migrate(seeded_db)
+        conn = sqlite3.connect(seeded_db)
+        rows = conn.execute(
+            "SELECT provider, manager_user_id FROM accounts ORDER BY id"
+        ).fetchall()
+        # 没人叫 '' / '胡宇彤' / 'hytt' → 全 NULL
+        assert all(r[1] is None for r in rows)
+
+    def test_migrate_drops_old_api_configs_table(self, seeded_db):
+        mig.do_migrate(seeded_db)
+        conn = sqlite3.connect(seeded_db)
+        row = conn.execute(
+            "SELECT type FROM sqlite_master WHERE name='api_configs'"
+        ).fetchone()
+        assert row[0] == "view"
