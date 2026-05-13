@@ -60,3 +60,25 @@ class TestStateDetection:
         conn.commit()
         # accounts 表存在但 api_configs 还是表 → 半成品
         assert mig.detect_partial_state(conn) is not None
+
+
+class TestBackupAndPrecheck:
+    def test_backup_creates_file(self, fresh_db):
+        backup = mig.make_backup(fresh_db)
+        assert os.path.exists(backup)
+        # 备份是真实的 sqlite 文件
+        c = sqlite3.connect(backup)
+        n = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        assert n == 1
+
+    def test_precheck_passes_when_admin_exists(self, fresh_db):
+        conn = sqlite3.connect(fresh_db)
+        admin_id = mig.precheck_admin_user(conn)
+        assert admin_id == 1
+
+    def test_precheck_raises_without_admin(self, fresh_db):
+        conn = sqlite3.connect(fresh_db)
+        conn.execute("UPDATE users SET role='user' WHERE id=1")
+        conn.commit()
+        with pytest.raises(RuntimeError, match="role='admin'"):
+            mig.precheck_admin_user(conn)

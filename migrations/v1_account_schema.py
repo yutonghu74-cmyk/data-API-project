@@ -109,6 +109,25 @@ def detect_partial_state(conn: sqlite3.Connection) -> str | None:
     return None
 
 
+def make_backup(db_path: str) -> str:
+    """复制 DB 到 .pre-v1-{timestamp}.db,返回备份路径。"""
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = f"{BACKUP_PREFIX}{ts}.db"
+    backup_path = os.path.join(os.path.dirname(db_path) or ".", backup)
+    shutil.copy2(db_path, backup_path)
+    return backup_path
+
+
+def precheck_admin_user(conn: sqlite3.Connection) -> int:
+    """返回第一个 role='admin' 的 user id,没有则 RuntimeError。"""
+    row = conn.execute(
+        "SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1"
+    ).fetchone()
+    if not row:
+        raise RuntimeError("users 表中没有 role='admin' 用户,无法兜底 created_by")
+    return row[0]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
