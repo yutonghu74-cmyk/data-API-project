@@ -198,14 +198,69 @@ def do_migrate(db_path: str) -> None:
         conn.close()
 
 
+def do_check(db_path: str) -> None:
+    """干跑校验,只读,不动 DB。"""
+    if not os.path.exists(db_path):
+        sys.exit(f"DB 不存在: {db_path}")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    if is_already_migrated(conn):
+        print("✓ 已迁移过")
+        conn.close()
+        return
+    partial = detect_partial_state(conn)
+    if partial:
+        conn.close()
+        sys.exit(f"❌ {partial}")
+    admin_id = precheck_admin_user(conn)
+    print(f"✓ 兜底 created_by = users.id {admin_id}")
+    n = conn.execute("SELECT COUNT(*) FROM api_configs").fetchone()[0]
+    print(f"✓ 待迁移 api_configs 行数: {n}")
+    conn.close()
+
+
+def do_rollback(db_path: str) -> None:
+    """从最近一个 .pre-v1-*.db 备份还原。"""
+    base_dir = os.path.dirname(db_path) or "."
+    candidates = [
+        f for f in os.listdir(base_dir)
+        if f.startswith(BACKUP_PREFIX) and f.endswith(".db")
+    ]
+    if not candidates:
+        sys.exit("❌ 找不到备份文件")
+    candidates.sort(reverse=True)
+    latest = os.path.join(base_dir, candidates[0])
+    shutil.copy2(latest, db_path)
+    print(f"✓ 已从 {latest} 还原")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--rollback", action="store_true")
     parser.add_argument("--db", default=DB_PATH)
     args = parser.parse_args(argv)
-    # TODO 在后续 Task 填充
-    raise NotImplementedError
+
+    if args.check:
+        do_check(args.db)
+        return
+    if args.rollback:
+        do_rollback(args.db)
+        return
+
+    # 真跑
+    if not os.path.exists(args.db):
+        sys.exit(f"DB 不存在: {args.db}")
+    backup = make_backup(args.db)
+    print(f"✓ 已备份 → {backup}")
+    try:
+        do_migrate(args.db)
+        print("✓ 迁移成功")
+    except Exception as e:
+        print(f"❌ 迁移失败: {e}")
+        print(f"   备份完好: {backup}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

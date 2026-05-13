@@ -211,3 +211,26 @@ class TestMigrationIdempotencyAndVerify:
             "SELECT c.name FROM api_requests r JOIN api_configs c ON c.id=r.config_id WHERE r.id=10"
         ).fetchone()
         assert row[0] == "testv01"
+
+
+class TestCLIFlags:
+    def test_check_does_not_modify_db(self, seeded_db, capsys):
+        mig.main(["--db", seeded_db, "--check"])
+        # 跑完后 api_configs 仍是表
+        conn = sqlite3.connect(seeded_db)
+        row = conn.execute(
+            "SELECT type FROM sqlite_master WHERE name='api_configs'"
+        ).fetchone()
+        assert row[0] == "table"
+
+    def test_rollback_restores_backup(self, seeded_db):
+        mig.make_backup(seeded_db)
+        mig.do_migrate(seeded_db)
+        # 现在 seeded_db 已迁移
+        conn = sqlite3.connect(seeded_db)
+        assert mig.is_already_migrated(conn)
+        conn.close()
+        # rollback 应该把 seeded_db 恢复
+        mig.do_rollback(seeded_db)
+        conn = sqlite3.connect(seeded_db)
+        assert not mig.is_already_migrated(conn)
