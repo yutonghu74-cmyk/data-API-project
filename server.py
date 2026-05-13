@@ -731,6 +731,100 @@ def delete_sub_account_new(sub_id: int, x_token: str = Header(default="")):
     return
 
 
+# ── Admin: api_keys ───────────────────────────────────────
+
+@app.get("/admin/sub-accounts/{sub_id}/api-keys")
+def list_api_keys(sub_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        sub = _get_sub_account_or_404(conn, sub_id)
+        if user["role"] != "admin":
+            if sub["account_created_by"] != user["id"] and sub["account_manager"] != user["id"]:
+                raise HTTPException(403, "无权访问")
+        rows = conn.execute(
+            "SELECT * FROM api_keys WHERE sub_account_id=? ORDER BY id DESC",
+            (sub_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.post("/admin/sub-accounts/{sub_id}/api-keys")
+def create_api_key(sub_id: int, body: ApiKeyIn,
+                   x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        sub = _get_sub_account_or_404(conn, sub_id)
+        if user["role"] != "admin" and sub["account_created_by"] != user["id"]:
+            raise HTTPException(403, "无权操作")
+        provider = sub["account_provider"]
+        dup = conn.execute("""
+            SELECT 1 FROM api_keys k
+            JOIN sub_accounts s ON s.id = k.sub_account_id
+            JOIN accounts a     ON a.id = s.account_id
+            WHERE a.provider = ? AND k.api_key = ?
+            LIMIT 1
+        """, (provider, body.api_key)).fetchone()
+        if dup:
+            raise HTTPException(409, "该 provider 下已存在相同 key 字符串")
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            "INSERT INTO api_keys (sub_account_id, name, api_key, is_active, "
+            "exhausted, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (sub_id, body.name, body.api_key, body.is_active,
+             body.exhausted, now),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM api_keys WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def _get_api_key_or_404(conn, key_id: int):
+    row = conn.execute("""
+        SELECT k.*, a.created_by AS account_created_by
+        FROM api_keys k
+        JOIN sub_accounts s ON s.id = k.sub_account_id
+        JOIN accounts a     ON a.id = s.account_id
+        WHERE k.id = ?
+    """, (key_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "key 不存在")
+    return row
+
+
+@app.put("/admin/api-keys/{key_id}")
+def update_api_key(key_id: int, body: ApiKeyIn,
+                   x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        key = _get_api_key_or_404(conn, key_id)
+        if user["role"] != "admin" and key["account_created_by"] != user["id"]:
+            raise HTTPException(403, "无权操作")
+        conn.execute(
+            "UPDATE api_keys SET name=?, api_key=?, is_active=?, exhausted=? WHERE id=?",
+            (body.name, body.api_key, body.is_active, body.exhausted, key_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM api_keys WHERE id=?", (key_id,)).fetchone()
+    return dict(row)
+
+
+@app.delete("/admin/api-keys/{key_id}", status_code=204)
+def delete_api_key(key_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        key = _get_api_key_or_404(conn, key_id)
+        if user["role"] != "admin" and key["account_created_by"] != user["id"]:
+            raise HTTPException(403, "无权操作")
+        used = conn.execute(
+            "SELECT 1 FROM usage_stats WHERE config_id=? LIMIT 1", (key_id,)
+        ).fetchone()
+        if used:
+            raise HTTPException(400, "已被调用,不能删除")
+        conn.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
+        conn.commit()
+    return
+
+
 # ── Admin: configs ────────────────────────────────────────
 
 class ConfigIn(BaseModel):

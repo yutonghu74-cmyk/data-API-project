@@ -280,3 +280,107 @@ class TestSubAccounts:
         r = client.post(f"/admin/accounts/{aid}/sub-accounts",
                         headers=auth(toks["c"]), json={"name": "S1"})
         assert r.status_code == 403
+
+
+class TestApiKeys:
+    def _setup_sub(self, client, toks, owner="b", provider="p1"):
+        r = client.post("/admin/accounts", headers=auth(toks[owner]),
+                        json={"provider": provider, "base_url": "http://x"})
+        aid = r.json()["id"]
+        r = client.post(f"/admin/accounts/{aid}/sub-accounts",
+                        headers=auth(toks[owner]), json={"name": "S"})
+        return aid, r.json()["id"]
+
+    def test_create_key(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        _, sid = self._setup_sub(client, toks)
+        r = client.post(f"/admin/sub-accounts/{sid}/api-keys",
+                        headers=auth(toks["b"]),
+                        json={"name": "k1", "api_key": "sk-aaa"})
+        assert r.status_code == 200
+        assert r.json()["name"] == "k1"
+
+    def test_dedup_same_provider_same_key_rejected(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        _, sid1 = self._setup_sub(client, toks, owner="b", provider="p1")
+        _, sid2 = self._setup_sub(client, toks, owner="b", provider="p1")
+        client.post(f"/admin/sub-accounts/{sid1}/api-keys",
+                    headers=auth(toks["b"]),
+                    json={"name": "k1", "api_key": "sk-same"})
+        r = client.post(f"/admin/sub-accounts/{sid2}/api-keys",
+                        headers=auth(toks["b"]),
+                        json={"name": "k2", "api_key": "sk-same"})
+        assert r.status_code == 409
+        assert "已存在" in r.json()["detail"]
+
+    def test_dedup_different_provider_same_key_allowed(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        _, sid1 = self._setup_sub(client, toks, owner="b", provider="p1")
+        _, sid2 = self._setup_sub(client, toks, owner="b", provider="p2")
+        r1 = client.post(f"/admin/sub-accounts/{sid1}/api-keys",
+                         headers=auth(toks["b"]),
+                         json={"name": "k1", "api_key": "sk-same"})
+        r2 = client.post(f"/admin/sub-accounts/{sid2}/api-keys",
+                         headers=auth(toks["b"]),
+                         json={"name": "k2", "api_key": "sk-same"})
+        assert r1.status_code == 200 and r2.status_code == 200
+
+    def test_list_keys(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        _, sid = self._setup_sub(client, toks)
+        for n, k in [("k1", "sk-1"), ("k2", "sk-2")]:
+            client.post(f"/admin/sub-accounts/{sid}/api-keys",
+                        headers=auth(toks["b"]),
+                        json={"name": n, "api_key": k})
+        r = client.get(f"/admin/sub-accounts/{sid}/api-keys",
+                       headers=auth(toks["b"]))
+        assert len(r.json()) == 2
+
+    def test_update_key(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        _, sid = self._setup_sub(client, toks)
+        r = client.post(f"/admin/sub-accounts/{sid}/api-keys",
+                        headers=auth(toks["b"]),
+                        json={"name": "k1", "api_key": "sk"})
+        kid = r.json()["id"]
+        r = client.put(f"/admin/api-keys/{kid}", headers=auth(toks["b"]),
+                       json={"name": "k1-new", "api_key": "sk", "is_active": 0})
+        assert r.json()["name"] == "k1-new"
+        assert r.json()["is_active"] == 0
+
+    def test_delete_unused_key(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        _, sid = self._setup_sub(client, toks)
+        r = client.post(f"/admin/sub-accounts/{sid}/api-keys",
+                        headers=auth(toks["b"]),
+                        json={"name": "k1", "api_key": "sk"})
+        kid = r.json()["id"]
+        r = client.delete(f"/admin/api-keys/{kid}", headers=auth(toks["b"]))
+        assert r.status_code == 204
+
+    def test_delete_used_key_rejected(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        _, sid = self._setup_sub(client, toks)
+        r = client.post(f"/admin/sub-accounts/{sid}/api-keys",
+                        headers=auth(toks["b"]),
+                        json={"name": "k1", "api_key": "sk-used"})
+        kid = r.json()["id"]
+        with server.get_db() as conn:
+            conn.execute(
+                "INSERT INTO usage_stats (config_id, user_id, called_at, model) "
+                "VALUES (?, 1, '2026-01-01', 'm')",
+                (kid,),
+            )
+            conn.commit()
+        r = client.delete(f"/admin/api-keys/{kid}", headers=auth(toks["b"]))
+        assert r.status_code == 400
+        assert "调用" in r.json()["detail"]
+
+    def test_delete_sub_account_with_keys_fails(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        _, sid = self._setup_sub(client, toks)
+        client.post(f"/admin/sub-accounts/{sid}/api-keys",
+                    headers=auth(toks["b"]),
+                    json={"name": "k1", "api_key": "sk-x-1"})
+        r = client.delete(f"/admin/sub-accounts/{sid}", headers=auth(toks["b"]))
+        assert r.status_code == 400
