@@ -1,0 +1,7 @@
+# 迁移备份
+admin.db.pre-v1-*.db
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
