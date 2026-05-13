@@ -549,9 +549,55 @@ async function onDelKey(keyId) {
 
 document.getElementById('addKeyBtn').addEventListener('click', () => openKeyCreate());
 
-// ── 列筛选占位(Task 22 实现)──────────────────────────────
-async function refreshFilterDropdowns() {}
-function applyFilters(rows) { return rows; }
+// ── 列筛选 ──────────────────────────────────────────────
+async function refreshFilterDropdowns() {
+  const providers = [...new Set(allAccounts.map(a => a.provider).filter(Boolean))].sort();
+  const teams     = [...new Set(allAccounts.map(a => a.team).filter(Boolean))].sort();
+  const managers  = [...new Set(allAccounts.map(a => a.manager_username).filter(Boolean))].sort();
+  const creators  = [...new Set(allAccounts.map(a => a.creator_username).filter(Boolean))].sort();
+  const subs      = [...new Set(Object.values(allSubAccounts).flat().map(s => s.name).filter(Boolean))].sort();
+
+  const fill = (sel, opts) => {
+    const el = document.querySelector(`[data-filter="${sel}"]`);
+    if (!el) return;
+    const cur = el.value;
+    el.innerHTML = '<option value="">全部</option>' +
+      opts.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
+    el.value = cur;
+  };
+  fill('provider', providers);
+  fill('team',     teams);
+  fill('manager',  managers);
+  fill('creator',  creators);
+  fill('sub_account', subs);
+}
+
+function applyFilters(rows) {
+  const f = {};
+  document.querySelectorAll('[data-filter]').forEach(el => {
+    const v = el.value.trim();
+    if (v) f[el.dataset.filter] = v;
+  });
+  return rows.filter(r => {
+    const a = r.account, s = r.sub, k = r.key;
+    if (f.provider && a.provider !== f.provider) return false;
+    if (f.team && a.team !== f.team) return false;
+    if (f.manager && a.manager_username !== f.manager) return false;
+    if (f.creator && a.creator_username !== f.creator) return false;
+    if (f.sub_account && (!s || s.name !== f.sub_account)) return false;
+    if (f.base_url && !(a.base_url || '').includes(f.base_url)) return false;
+    if (f.backend && !(a.provider_backend_url || '').includes(f.backend)) return false;
+    if (f.quota_total && !(a.quota_total_path || '').includes(f.quota_total)) return false;
+    if (f.balance && !(a.balance_path || '').includes(f.balance)) return false;
+    if (f.cost && !(a.cost_path || '').includes(f.cost)) return false;
+    if (f.api_name && !(k?.name || '').includes(f.api_name)) return false;
+    if (f.api_key && !(k?.api_key || '').includes(f.api_key)) return false;
+    return true;
+  });
+}
+
+document.getElementById('filterRow').addEventListener('input', () => renderTable());
+document.getElementById('filterRow').addEventListener('change', () => renderTable());
 
 // ── 入口 ──────────────────────────────────────────────────
 document.getElementById('reloadBtn').addEventListener('click', loadAll);
