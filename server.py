@@ -701,6 +701,23 @@ def get_current_user(x_token: str = Header(default="")):
         raise HTTPException(status_code=401, detail="登录已过期")
     return dict(row)
 
+
+def visibility_filter(user: dict) -> tuple[str, tuple]:
+    """返回追加到 WHERE 的 (子句, params)。admin role 时不限制。"""
+    if user["role"] == "admin":
+        return "1=1", ()
+    return "(a.created_by=? OR a.manager_user_id=?)", (user["id"], user["id"])
+
+
+def require_owner_or_admin(user: dict, account: dict) -> None:
+    """写权限:创建人或 admin role。manager 不行。"""
+    if user["role"] == "admin":
+        return
+    if account["created_by"] == user["id"]:
+        return
+    raise HTTPException(status_code=403, detail="无权操作此帐号")
+
+
 @app.post("/auth/register")
 def register(body: RegisterIn):
     if not body.username.strip() or not body.password.strip():
