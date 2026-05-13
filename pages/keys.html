@@ -39,39 +39,44 @@
   <span class="current">密钥管理</span>
 </div>
 
-    <!-- 管理员：显示完整密钥管理 -->
+    <!-- 管理员:三层结构表(Spec 1) -->
     <div id="adminSection" style="display:none">
-      <div class="toolbar">
+      <div class="toolbar" style="margin-bottom:12px">
         <span class="page-title" style="margin:0">密钥管理</span>
-        <button class="btn btn-primary" id="addConfigBtn">+ 新增账号</button>
-      </div>
-      <div class="card" style="padding:0;overflow:hidden">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>API名称</th><th>供应商</th><th>密钥</th><th>可用模型</th><th>管理员</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
-            </thead>
-            <tbody id="adminTbody"></tbody>
-          </table>
+        <div style="display:flex;gap:8px;margin-left:auto">
+          <button class="btn btn-primary" id="addAccountBtn">+ 新增帐号</button>
+          <button class="btn btn-primary" id="addKeyBtn">+ 新增 API key</button>
+          <button class="btn btn-secondary" id="reloadBtn">刷新</button>
         </div>
       </div>
-    </div>
-
-    <!-- 子账号管理面板（管理员点击展开） -->
-    <div id="subAccountPanel" style="display:none;margin-top:20px">
-      <div class="toolbar">
-        <span style="font-size:1rem;font-weight:600" id="subPanelTitle">子账号管理</span>
-        <button class="btn btn-primary" id="addSubBtn">+ 新增子账号</button>
-      </div>
-      <div class="card" style="padding:0;overflow:hidden">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>名称</th><th>描述</th><th>可用模型</th><th>额度类型</th><th>额度</th><th>IP限制</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
-            </thead>
-            <tbody id="subTbody"></tbody>
-          </table>
-        </div>
+      <div class="card" style="padding:0;overflow:auto">
+        <table id="acctTable" style="min-width:1800px">
+          <thead>
+            <tr>
+              <th>供应商</th><th>base_url</th><th>后端网址</th>
+              <th>总额接口</th><th>余额接口</th><th>费用接口</th>
+              <th>子帐号</th><th>API名称</th><th>API key</th>
+              <th>管理员</th><th>团队</th><th>创建人</th>
+              <th>总额</th><th>余额</th><th>操作</th>
+            </tr>
+            <tr id="filterRow">
+              <th><select data-filter="provider"><option value="">全部</option></select></th>
+              <th><input data-filter="base_url" placeholder="筛选"></th>
+              <th><input data-filter="backend"></th>
+              <th><input data-filter="quota_total"></th>
+              <th><input data-filter="balance"></th>
+              <th><input data-filter="cost"></th>
+              <th><select data-filter="sub_account"><option value="">全部</option></select></th>
+              <th><input data-filter="api_name"></th>
+              <th><input data-filter="api_key"></th>
+              <th><select data-filter="manager"><option value="">全部</option></select></th>
+              <th><select data-filter="team"><option value="">全部</option></select></th>
+              <th><select data-filter="creator"><option value="">全部</option></select></th>
+              <th>—</th><th>—</th><th>—</th>
+            </tr>
+          </thead>
+          <tbody id="acctTbody"></tbody>
+        </table>
       </div>
     </div>
 
@@ -96,71 +101,7 @@
   </div>
 </div>
 
-<!-- 子账号新增/编辑弹窗 -->
-<div class="modal-bg" id="subModalBg">
-  <div class="modal">
-    <h3 id="subModalTitle">新增子账号</h3>
-    <div class="form-group"><label>名称</label><input id="sfName" placeholder="如 项目A账号"></div>
-    <div class="form-group"><label>描述</label><input id="sfDesc" placeholder="可选说明"></div>
-    <div class="form-group">
-      <label>可用模型 <span style="color:var(--text-muted);font-weight:400">（逗号分隔，留空则继承父配置）</span></label>
-      <input id="sfModels" placeholder="claude-sonnet-4-6,claude-haiku-4-5-20251001">
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-      <div class="form-group" style="margin:0">
-        <label>额度类型</label>
-        <select id="sfQuotaType">
-          <option value="unlimited">无限额度</option>
-          <option value="amount">金额限制</option>
-        </select>
-      </div>
-      <div class="form-group" style="margin:0" id="sfQuotaAmountGroup">
-        <label>额度金额（元）</label>
-        <input id="sfQuotaAmount" type="number" placeholder="0" min="0" step="0.01">
-      </div>
-    </div>
-    <div class="form-group" style="margin-top:12px">
-      <label>IP 限制 <span style="color:var(--text-muted);font-weight:400">（可选，逗号分隔，留空不限制）</span></label>
-      <input id="sfIp" placeholder="192.168.1.1,10.0.0.0/24">
-    </div>
-    <p style="color:#dc2626;font-size:.83rem;min-height:18px" id="subModalError"></p>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" id="subCancelBtn">取消</button>
-      <button class="btn btn-primary"   id="subSaveBtn">保存</button>
-    </div>
-  </div>
-</div>
-
-<!-- 新增/编辑弹窗（管理员） -->
-<div class="modal-bg" id="modalBg">
-  <div class="modal">
-    <h3 id="modalTitle">新增账号</h3>
-    <div class="form-group"><label>API名称</label><input id="fName" placeholder="如 Claude API"></div>
-    <div class="form-group"><label>管理员</label><input id="fManager" placeholder="负责管理员姓名"></div>
-    <div class="form-group"><label>供应商</label><input id="fProvider" placeholder="如 anthropic"></div>
-    <div class="form-group"><label>Base URL</label><input id="fBaseUrl" placeholder="https://api.anthropic.com/v1"></div>
-    <div class="form-group"><label>API Key</label><input id="fApiKey" type="password" placeholder="sk-ant-...（编辑时留空则不修改）"></div>
-    <div class="form-group">
-      <label>可用模型 <span style="color:var(--text-muted);font-weight:400">（多个用逗号分隔）</span></label>
-      <textarea id="fModels" rows="2" placeholder="claude-sonnet-4-6,claude-haiku-4-5-20251001"></textarea>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-      <div class="form-group" style="margin:0">
-        <label>Input 价格 <span style="color:var(--text-muted);font-weight:400">（元/千token）</span></label>
-        <input id="fPriceInput" type="number" placeholder="0" min="0" step="0.0001">
-      </div>
-      <div class="form-group" style="margin:0">
-        <label>Output 价格 <span style="color:var(--text-muted);font-weight:400">（元/千token）</span></label>
-        <input id="fPriceOutput" type="number" placeholder="0" min="0" step="0.0001">
-      </div>
-    </div>
-    <p style="color:#dc2626;font-size:.83rem;min-height:18px;margin-top:8px" id="modalError"></p>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" id="cancelBtn">取消</button>
-      <button class="btn btn-primary"   id="saveBtn">保存</button>
-    </div>
-  </div>
-</div>
+<!-- Modals: Task 20/21 加入 Modal A / B / C -->
 
 <script type="module">
 import { initSidebar } from '../assets/js/sidebar.js';
