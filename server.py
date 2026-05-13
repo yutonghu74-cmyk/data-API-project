@@ -825,6 +825,34 @@ def delete_api_key(key_id: int, x_token: str = Header(default="")):
     return
 
 
+# ── Admin: providers / teams (Spec 1) ─────────────────────
+
+@app.get("/admin/providers")
+def list_providers_spec1(x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    where_sql, where_params = visibility_filter(user)
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT a.provider FROM accounts a "
+            f"WHERE {where_sql} AND a.provider <> ''",
+            where_params,
+        ).fetchall()
+    return [r["provider"] for r in rows]
+
+
+@app.get("/admin/teams")
+def list_teams(x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    where_sql, where_params = visibility_filter(user)
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT a.team FROM accounts a "
+            f"WHERE {where_sql} AND a.team <> ''",
+            where_params,
+        ).fetchall()
+    return [r["team"] for r in rows]
+
+
 # ── Admin: configs ────────────────────────────────────────
 
 class ConfigIn(BaseModel):

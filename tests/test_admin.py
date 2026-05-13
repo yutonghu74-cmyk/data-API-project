@@ -384,3 +384,28 @@ class TestApiKeys:
                     json={"name": "k1", "api_key": "sk-x-1"})
         r = client.delete(f"/admin/sub-accounts/{sid}", headers=auth(toks["b"]))
         assert r.status_code == 400
+
+
+class TestProvidersAndTeams:
+    def test_providers_distinct(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        for prov in ("p1", "p2", "p1"):
+            client.post("/admin/accounts", headers=auth(toks["a"]),
+                        json={"provider": prov, "base_url": "http://x"})
+        r = client.get("/admin/providers", headers=auth(toks["a"]))
+        assert sorted(r.json()) == ["p1", "p2"]
+
+    def test_teams_distinct(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        for team in ("研发", "算法", "研发"):
+            client.post("/admin/accounts", headers=auth(toks["a"]),
+                        json={"provider": "p", "base_url": "http://x", "team": team})
+        r = client.get("/admin/teams", headers=auth(toks["a"]))
+        assert set(r.json()) == {"算法", "研发"}
+
+    def test_providers_respect_visibility(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        client.post("/admin/accounts", headers=auth(toks["b"]),
+                    json={"provider": "only-b-sees", "base_url": "http://x"})
+        r = client.get("/admin/providers", headers=auth(toks["c"]))
+        assert "only-b-sees" not in r.json()
