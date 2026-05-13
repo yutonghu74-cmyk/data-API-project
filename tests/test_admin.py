@@ -81,36 +81,25 @@ class TestListUsers:
         assert any(u["role"] == "admin" for u in users)
 
 
-# ── POST /admin/configs ───────────────────────────────────────────────────────
+# ── 旧写端点已在 Spec 1 移除 ────────────────────────────────────────────────
 
-class TestCreateConfig:
-    _payload = {
-        "name": "test-config",
-        "base_url": "https://api.example.com/v1",
-        "api_key": "sk-test-key",
-        "provider": "anthropic",
-        "models": "claude-sonnet-4-6",
-        "price_input": 0.003,
-        "price_output": 0.015,
-        "is_active": 1,
-    }
+class TestRemovedLegacyWriteEndpoints:
+    """POST/PUT/DELETE /admin/configs 已删除,改用 /admin/accounts。"""
 
-    def test_no_auth_returns_403(self, client):
-        r = client.post("/admin/configs", json=self._payload)
-        assert r.status_code == 403
+    def test_post_admin_configs_removed(self, client):
+        r = client.post("/admin/configs", headers=GOOD, json={
+            "name": "x", "base_url": "u", "api_key": "k", "provider": "p"})
+        # 路由不存在 → 405 Method Not Allowed 或 404 Not Found
+        assert r.status_code in (404, 405)
 
-    def test_wrong_auth_returns_403(self, client):
-        r = client.post("/admin/configs", json=self._payload, headers=BAD)
-        assert r.status_code == 403
+    def test_put_admin_configs_removed(self, client):
+        r = client.put("/admin/configs/1", headers=GOOD, json={
+            "name": "x", "base_url": "u", "api_key": "k", "provider": "p"})
+        assert r.status_code in (404, 405)
 
-    def test_correct_auth_creates_config(self, client):
-        r = client.post("/admin/configs", json=self._payload, headers=GOOD)
-        assert r.status_code == 200
-        data = r.json()
-        assert data["name"] == self._payload["name"]
-        assert data["provider"] == self._payload["provider"]
-        # API key is masked in response
-        assert "****" in data["api_key"]
+    def test_delete_admin_configs_removed(self, client):
+        r = client.delete("/admin/configs/1", headers=GOOD)
+        assert r.status_code in (404, 405)
 
 
 # ── Spec 1 新端点测试 ────────────────────────────────────

@@ -909,52 +909,8 @@ def list_configs(x_admin_password: str = Header(default="")):
         result.append(d)
     return result
 
-@app.post("/admin/configs")
-def create_config(body: ConfigIn, x_admin_password: str = Header(default="")):
-    require_admin(x_admin_password)
-    now = datetime.now(timezone.utc).isoformat()
-    with get_db() as conn:
-        cur = conn.execute(
-            "INSERT INTO api_configs (name,base_url,api_key,provider,models,price_input,price_output,manager,created_at,updated_at,is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (body.name, body.base_url, body.api_key, body.provider, body.models, body.price_input, body.price_output, body.manager, now, now, body.is_active)
-        )
-        conn.commit()
-        row = conn.execute("SELECT * FROM api_configs WHERE id=?", (cur.lastrowid,)).fetchone()
-    d = dict(row)
-    d["api_key"] = "****" + d["api_key"][-4:] if len(d["api_key"]) >= 4 else "****"
-    return d
+# Spec 1: POST/PUT/DELETE /admin/configs 已移除,改用 /admin/accounts + /admin/api-keys
 
-@app.put("/admin/configs/{config_id}")
-def update_config(config_id: int, body: ConfigIn, x_admin_password: str = Header(default="")):
-    require_admin(x_admin_password)
-    now = datetime.now(timezone.utc).isoformat()
-    with get_db() as conn:
-        if body.api_key and body.api_key != "(unchanged)":
-            conn.execute(
-                "UPDATE api_configs SET name=?,base_url=?,api_key=?,provider=?,models=?,price_input=?,price_output=?,manager=?,updated_at=?,is_active=? WHERE id=?",
-                (body.name, body.base_url, body.api_key, body.provider, body.models, body.price_input, body.price_output, body.manager, now, body.is_active, config_id)
-            )
-        else:
-            conn.execute(
-                "UPDATE api_configs SET name=?,base_url=?,provider=?,models=?,price_input=?,price_output=?,manager=?,updated_at=?,is_active=? WHERE id=?",
-                (body.name, body.base_url, body.provider, body.models, body.price_input, body.price_output, body.manager, now, body.is_active, config_id)
-            )
-        conn.commit()
-        row = conn.execute("SELECT * FROM api_configs WHERE id=?", (config_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Not found")
-    d = dict(row)
-    d["api_key"] = "****" + d["api_key"][-4:] if len(d["api_key"]) >= 4 else "****"
-    return d
-
-@app.delete("/admin/configs/{config_id}")
-def delete_config(config_id: int, x_admin_password: str = Header(default="")):
-    require_admin(x_admin_password)
-    with get_db() as conn:
-        conn.execute("DELETE FROM usage_stats WHERE config_id=?", (config_id,))
-        conn.execute("DELETE FROM api_configs WHERE id=?", (config_id,))
-        conn.commit()
-    return {"ok": True}
 
 # ── Admin: stats ───────────────────────────────────────────
 
@@ -1364,58 +1320,9 @@ def admin_history(user_id: int | None = None, x_admin_password: str = Header(def
             """).fetchall()
     return [dict(r) for r in rows]
 
-# ── 子账号管理 ─────────────────────────────────────────────
+# Spec 1: 旧子账号端点(/admin/configs/{id}/sub-accounts, /admin/sub-accounts/*)
+# 已移除,改用 /admin/accounts/{id}/sub-accounts + /admin/sub-accounts/{id}
 
-class SubAccountIn(BaseModel):
-    name: str
-    description: str = ""
-    available_models: str = ""
-    quota_type: str = "unlimited"
-    quota_amount: float = 0
-    ip_restriction: str = ""
-    is_active: int = 1
-
-@app.get("/admin/configs/{config_id}/sub-accounts")
-def list_sub_accounts(config_id: int, x_admin_password: str = Header(default="")):
-    require_admin(x_admin_password)
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM sub_accounts WHERE config_id=? ORDER BY id DESC", (config_id,)
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-@app.post("/admin/configs/{config_id}/sub-accounts")
-def create_sub_account(config_id: int, body: SubAccountIn, x_admin_password: str = Header(default="")):
-    require_admin(x_admin_password)
-    now = datetime.now(timezone.utc).isoformat()
-    with get_db() as conn:
-        cur = conn.execute(
-            "INSERT INTO sub_accounts (config_id,name,description,available_models,quota_type,quota_amount,ip_restriction,is_active,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (config_id, body.name, body.description, body.available_models, body.quota_type, body.quota_amount, body.ip_restriction, body.is_active, now)
-        )
-        conn.commit()
-        row = conn.execute("SELECT * FROM sub_accounts WHERE id=?", (cur.lastrowid,)).fetchone()
-    return dict(row)
-
-@app.put("/admin/sub-accounts/{sub_id}")
-def update_sub_account(sub_id: int, body: SubAccountIn, x_admin_password: str = Header(default="")):
-    require_admin(x_admin_password)
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE sub_accounts SET name=?,description=?,available_models=?,quota_type=?,quota_amount=?,ip_restriction=?,is_active=? WHERE id=?",
-            (body.name, body.description, body.available_models, body.quota_type, body.quota_amount, body.ip_restriction, body.is_active, sub_id)
-        )
-        conn.commit()
-        row = conn.execute("SELECT * FROM sub_accounts WHERE id=?", (sub_id,)).fetchone()
-    return dict(row)
-
-@app.delete("/admin/sub-accounts/{sub_id}")
-def delete_sub_account(sub_id: int, x_admin_password: str = Header(default="")):
-    require_admin(x_admin_password)
-    with get_db() as conn:
-        conn.execute("DELETE FROM sub_accounts WHERE id=?", (sub_id,))
-        conn.commit()
-    return {"ok": True}
 
 @app.put("/admin/api-requests/{req_id}")
 def admin_review_request(req_id: int, body: ReviewIn, sub_account_id: int | None = None, x_admin_password: str = Header(default="")):
