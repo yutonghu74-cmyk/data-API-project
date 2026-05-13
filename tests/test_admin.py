@@ -186,3 +186,51 @@ class TestGetAccounts:
                           "manager_user_id": ids["c"]})
         r = client.get("/admin/accounts", headers=auth(toks["c"]))
         assert len(r.json()) == 1
+
+
+class TestUpdateDeleteAccounts:
+    def test_creator_can_update(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        r = client.post("/admin/accounts", headers=auth(toks["b"]),
+                        json={"provider": "p1", "base_url": "http://x"})
+        aid = r.json()["id"]
+        r = client.put(f"/admin/accounts/{aid}", headers=auth(toks["b"]),
+                       json={"provider": "p1", "base_url": "http://y", "team": "研发"})
+        assert r.status_code == 200
+        assert r.json()["base_url"] == "http://y"
+        assert r.json()["team"] == "研发"
+
+    def test_manager_cannot_update(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        ids = db_with_users["ids"]
+        r = client.post("/admin/accounts", headers=auth(toks["b"]),
+                        json={"provider": "p1", "base_url": "http://x",
+                              "manager_user_id": ids["c"]})
+        aid = r.json()["id"]
+        r = client.put(f"/admin/accounts/{aid}", headers=auth(toks["c"]),
+                       json={"provider": "p2", "base_url": "http://z"})
+        assert r.status_code == 403
+
+    def test_admin_can_update_anyone(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        r = client.post("/admin/accounts", headers=auth(toks["b"]),
+                        json={"provider": "p1", "base_url": "http://x"})
+        aid = r.json()["id"]
+        r = client.put(f"/admin/accounts/{aid}", headers=auth(toks["a"]),
+                       json={"provider": "p1", "base_url": "http://y"})
+        assert r.status_code == 200
+
+    def test_delete_cascades_sub_accounts(self, client, db_with_users):
+        toks = db_with_users["tokens"]
+        r = client.post("/admin/accounts", headers=auth(toks["b"]),
+                        json={"provider": "p1", "base_url": "http://x"})
+        aid = r.json()["id"]
+        client.post(f"/admin/accounts/{aid}/sub-accounts", headers=auth(toks["b"]),
+                    json={"name": "sub1"})
+        r = client.delete(f"/admin/accounts/{aid}", headers=auth(toks["b"]))
+        assert r.status_code == 204
+        with server.get_db() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM sub_accounts WHERE account_id=?", (aid,)
+            ).fetchone()[0]
+            assert n == 0

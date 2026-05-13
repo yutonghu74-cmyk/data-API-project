@@ -593,6 +593,58 @@ def create_account(body: AccountIn, x_token: str = Header(default="")):
     return dict(row)
 
 
+@app.put("/admin/accounts/{account_id}")
+def update_account(account_id: int, body: AccountIn,
+                   x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        acc = conn.execute(
+            "SELECT * FROM accounts WHERE id=?", (account_id,)
+        ).fetchone()
+        if not acc:
+            raise HTTPException(status_code=404, detail="不存在")
+        require_owner_or_admin(user, acc)
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("""
+            UPDATE accounts SET
+              provider=?, base_url=?, provider_backend_url=?, quota_total_path=?,
+              balance_path=?, cost_path=?, manager_user_id=?, team=?,
+              models=?, is_active=?, updated_at=?
+            WHERE id=?
+        """, (body.provider, body.base_url, body.provider_backend_url,
+              body.quota_total_path, body.balance_path, body.cost_path,
+              body.manager_user_id, body.team, body.models, body.is_active,
+              now, account_id))
+        conn.commit()
+        row = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+    return dict(row)
+
+
+@app.delete("/admin/accounts/{account_id}", status_code=204)
+def delete_account(account_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        acc = conn.execute(
+            "SELECT * FROM accounts WHERE id=?", (account_id,)
+        ).fetchone()
+        if not acc:
+            raise HTTPException(status_code=404, detail="不存在")
+        require_owner_or_admin(user, acc)
+        used = conn.execute("""
+            SELECT 1 FROM usage_stats us
+            JOIN api_keys k     ON k.id = us.config_id
+            JOIN sub_accounts s ON s.id = k.sub_account_id
+            WHERE s.account_id = ?
+            LIMIT 1
+        """, (account_id,)).fetchone()
+        if used:
+            raise HTTPException(status_code=400, detail="该帐号下有 API 已被调用,不能删除")
+        conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+        conn.commit()
+    return
+
+
 # ── Admin: configs ────────────────────────────────────────
 
 class ConfigIn(BaseModel):
