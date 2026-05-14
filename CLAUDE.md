@@ -45,7 +45,7 @@ python server.py          # 监听 :8000
 ## 设计规格
 
 已批准的功能规格存放于 `docs/superpowers/specs/`，实现前请先阅读对应文档。
-，
+
 - 顶栏、侧边栏等公共 UI 必须用 sidebar.js 动态注入,
      不要在每个页面 HTML 里硬编码,以保持单点修改
 
@@ -54,7 +54,7 @@ python server.py          # 监听 :8000
 
 ## 关键约束
 - 顶栏(topBar)由 assets/js/sidebar.js 通过 `initSidebar()` 动态注入,
-  **任何 HTML 页面都不应该硬编码 <div class="top-ba·r">**
+  **任何 HTML 页面都不应该硬编码 <div class="top-bar">**
 - 面包屑(breadcrumb)在 HTML 里直接写,但 toggle/brand/userBar 元素由 sidebar.js 动态插入
 
 ## 改动前必读
