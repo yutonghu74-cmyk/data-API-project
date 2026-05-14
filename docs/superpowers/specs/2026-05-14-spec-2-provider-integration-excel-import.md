@@ -18,7 +18,7 @@ Spec 1 完成了三层 schema(accounts → sub_accounts → api_keys)和 CRUD,�
 |---|---|
 | C1 | Modal A 选供应商时**前端从已有 accounts 派生模板**自动填字段(无需新表) |
 | C2 | 接通 Modal A 已收集的 provider 接口字段(无 schema 改动) |
-| C3 | `server/providers.py` 单文件 dict registry,per-provider 解析器 |
+| C3 | `server/providers.py` 通用 dot-path 提取器(无 per-provider 代码),JSON 路径由 Modal A 注册人配置 |
 | C4 | `keys.html` 总额/余额列实时调供应商接口,失败显示灰 "--" + hover 错误原因 |
 | C5 | exhausted(余额=0)的 key 缓存最后值,下次跳过 fetch |
 | D1 | `POST /admin/sub-accounts/{id}/api-keys/import-excel` 后端 openpyxl 解析 |
@@ -42,10 +42,10 @@ Spec 1 完成了三层 schema(accounts → sub_accounts → api_keys)和 CRUD,�
 | 3 | provider_templates **不建独立表** — 从 `allAccounts.filter(provider=X)` 取最近的 account 字段做"模板",纯前端逻辑 |
 | 4 | 自动填行为 = **iii 提示后用户决定**("检测到 provider 'X' 的 N 个已有帐号,应用其模板?Yes/No") |
 | 5 | 性能:**单聚合端点 `/admin/accounts/quota-all`**,后端 `asyncio.gather` 并发,10s timeout |
-| 6 | exhausted:`balance==0` → `exhausted=1`,缓存 `last_total/balance/used/quota_at` 4 列;**终态不可恢复**(用完新建 key) |
+| 6 | exhausted:**3 次 0 + 12h 间隔** 才标 exhausted,缓存 `last_total/balance/used/quota_at` + `zero_count/last_zero_at` 6 列;**终态不可恢复**(用完新建 key) |
 | 7 | exhausted=1 时下次打开**完全跳过**该 key 的网络调用,显示缓存值 + "(已用完,截至 YYYY-MM-DD)" |
-| 8 | parser registry = **`server/providers.py` 单文件 + dict** `PARSERS = {"yibu": parse_yibu, ...}` |
-| 9 | Excel:**a2** 逐行成功/失败 + **b1** 提供模板下载 + **c1** 100 行上限 + **d2** case-insensitive + trim |
+| 8 | Parser = **通用 dot-path 提取器**(无 per-provider Python 代码);**Modal A 让注册人为每个接口额外填一个 JSON 字段名**(如 `total_granted` 或 `data.balance`) |
+| 9 | Excel:**a2** 逐行成功/失败 + **b1** 提供模板下载 + **不设行数上限** + **d2** case-insensitive + trim |
 | 10 | 失败显示:**gray "--" + hover 错误原因** |
 | 11 | 鉴权 / 删除保护规则全部沿用 Spec 1 |
 
@@ -67,7 +67,7 @@ Spec 1 完成了三层 schema(accounts → sub_accounts → api_keys)和 CRUD,�
          │      └─ for non-exhausted:  asyncio.gather 并发
          │              │
          │              ▼
-         │      providers.py PARSERS[provider](resp, kind)
+         │      providers.extract_json_value(resp, json_path)
          │              │
          │              ▼
          │      httpx.AsyncClient(timeout=10) Bearer Key
@@ -83,34 +83,62 @@ Spec 1 完成了三层 schema(accounts → sub_accounts → api_keys)和 CRUD,�
 
 ## 数据库 schema
 
-### 4 个新列(在 `api_keys` 表)
+### 新增字段
+
+**A. 在 `api_keys` 表加 6 列**(原计划 4 列 + 3-strike 新增的 `zero_count` `last_zero_at`):
 
 ```sql
 ALTER TABLE api_keys ADD COLUMN last_total       REAL;
 ALTER TABLE api_keys ADD COLUMN last_balance     REAL;
 ALTER TABLE api_keys ADD COLUMN last_used        REAL;
 ALTER TABLE api_keys ADD COLUMN last_quota_at    TEXT;
+ALTER TABLE api_keys ADD COLUMN zero_count       INTEGER DEFAULT 0;  -- 连续读到 0 的次数
+ALTER TABLE api_keys ADD COLUMN last_zero_at     TEXT;                -- 最近一次读到 0 的时间
+```
+
+**B. 在 `accounts` 表加 3 列**(每个接口的 JSON 提取路径):
+
+```sql
+ALTER TABLE accounts ADD COLUMN quota_total_json_path  TEXT DEFAULT '';
+ALTER TABLE accounts ADD COLUMN balance_json_path      TEXT DEFAULT '';
+ALTER TABLE accounts ADD COLUMN cost_json_path         TEXT DEFAULT '';
 ```
 
 含义:
-- 每次拉取成功后写入,作为"最近一次成功值"
-- `exhausted=1` 时下次打开仅读这 4 列,不调网络
-- `last_quota_at` 用 ISO8601 字符串
+- 每次拉取成功后写入 `last_*`,作为"最近一次成功值"
+- `exhausted=1` 时下次打开仅读 `last_*` 4 列,不调网络
+- `zero_count` 累计连续 0 次数,3 即触发 exhausted
+- `last_zero_at` 用于判定"距上次 0 是否超过 12h",超过才计一次新 0
+- `quota_total_json_path` / `balance_json_path` / `cost_json_path` 是 dot-path,例如 `total_granted` 或 `data.balance.amount`
 
 ### 迁移机制
 
-**不写独立脚本。** 4 列都是 SQLite 安全的 ALTER ADD COLUMN,放进 `server.init_db()` 的现有 try/except 模式:
+**不写独立脚本。** 9 列都是 SQLite 安全的 ALTER ADD COLUMN,放进 `server.init_db()` 现有 try/except 模式:
 
 ```python
 # 在 init_db() 现有 api_keys CREATE TABLE 后面
 for col, defn in [
-    ("last_total",     "REAL"),
-    ("last_balance",   "REAL"),
-    ("last_used",      "REAL"),
-    ("last_quota_at",  "TEXT"),
+    ("last_total",       "REAL"),
+    ("last_balance",     "REAL"),
+    ("last_used",        "REAL"),
+    ("last_quota_at",    "TEXT"),
+    ("zero_count",       "INTEGER DEFAULT 0"),
+    ("last_zero_at",     "TEXT"),
 ]:
     try:
         conn.execute(f"ALTER TABLE api_keys ADD COLUMN {col} {defn}")
+        conn.commit()
+    except Exception:
+        pass
+
+# accounts 三列
+for col, defn in [
+    ("quota_total_json_path", "TEXT DEFAULT ''"),
+    ("balance_json_path",     "TEXT DEFAULT ''"),
+    ("cost_json_path",        "TEXT DEFAULT ''"),
+]:
+    try:
+        conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} {defn}")
         conn.commit()
     except Exception:
         pass
@@ -151,7 +179,8 @@ async def quota_all(x_token: str = Header(default="")):
     with get_db() as conn:
         rows = conn.execute(f"""
             SELECT k.*, a.provider, a.base_url, a.provider_backend_url,
-                   a.quota_total_path, a.balance_path, a.cost_path
+                   a.quota_total_path, a.balance_path, a.cost_path,
+                   a.quota_total_json_path, a.balance_json_path, a.cost_json_path
             FROM api_keys k
             JOIN sub_accounts s ON s.id = k.sub_account_id
             JOIN accounts a     ON a.id = s.account_id
@@ -182,20 +211,44 @@ async def quota_all(x_token: str = Header(default="")):
             continue
         total, balance, used = result
         partial = (total is None) or (balance is None) or (used is None)
+
+        # === 3-strike exhaustion 逻辑 ===
+        new_zero_count = r["zero_count"] or 0
+        new_last_zero_at = r["last_zero_at"]
+        new_exhausted = 0
+        if balance is not None and balance == 0:
+            # 距上次 0 是否超过 12h?如果是计一次新 0
+            from datetime import datetime as _dt, timezone as _tz
+            now = _dt.now(_tz.utc)
+            should_count = True
+            if new_last_zero_at:
+                last = _dt.fromisoformat(new_last_zero_at)
+                if (now - last).total_seconds() < 12 * 3600:
+                    should_count = False  # 12h 没到,不重复计
+            if should_count:
+                new_zero_count += 1
+                new_last_zero_at = now_iso
+            if new_zero_count >= 3:
+                new_exhausted = 1
+        elif balance is not None and balance > 0:
+            # 非零归零计数器
+            new_zero_count = 0
+            new_last_zero_at = None
+
         results[kid] = {
             "total": total, "balance": balance, "used": used,
-            "exhausted": False, "from_cache": False,
+            "exhausted": bool(new_exhausted), "from_cache": False,
             "partial": partial,
+            "zero_count": new_zero_count,  # 调试用,前端可不展示
         }
-        # 写缓存,余额=0 时翻 exhausted
         with get_db() as conn:
             conn.execute("""
                 UPDATE api_keys
                 SET last_total=?, last_balance=?, last_used=?, last_quota_at=?,
-                    exhausted=?
+                    zero_count=?, last_zero_at=?, exhausted=?
                 WHERE id=?
             """, (total, balance, used, now_iso,
-                  1 if (balance is not None and balance == 0) else 0,
+                  new_zero_count, new_last_zero_at, new_exhausted,
                   r["id"]))
             conn.commit()
 
@@ -205,9 +258,6 @@ async def quota_all(x_token: str = Header(default="")):
 async def _fetch_one_key(r: dict) -> tuple:
     """3 接口并发拉取。返回 (total, balance, used),失败的为 None。"""
     base = (r["provider_backend_url"] or r["base_url"] or "").rstrip("/")
-    parser = providers.PARSERS.get(r["provider"])
-    if not parser:
-        raise RuntimeError(f"未知 provider: {r['provider']}")
     headers = {"Authorization": f"Bearer {r['api_key']}"}
 
     async def _get(path):
@@ -224,11 +274,21 @@ async def _fetch_one_key(r: dict) -> tuple:
         _get(r["cost_path"]),
         return_exceptions=True,
     )
-    total   = parser(raw[0], "total")    if not isinstance(raw[0], Exception) and raw[0] is not None else None
-    balance = parser(raw[1], "balance")  if not isinstance(raw[1], Exception) and raw[1] is not None else None
-    used    = parser(raw[2], "used")     if not isinstance(raw[2], Exception) and raw[2] is not None else None
+    from providers import extract_json_value
+    total   = extract_json_value(raw[0], r["quota_total_json_path"]) if not isinstance(raw[0], Exception) else None
+    balance = extract_json_value(raw[1], r["balance_json_path"])     if not isinstance(raw[1], Exception) else None
+    used    = extract_json_value(raw[2], r["cost_json_path"])        if not isinstance(raw[2], Exception) else None
     return total, balance, used
 ```
+
+**3-strike 逻辑直觉示例:**
+- T0 读到 0 → zero_count=1, last_zero_at=T0
+- T0+1h 又读到 0 → 12h 没到,不计 → zero_count 仍=1
+- T0+13h 读到 0 → 12h 过了,zero_count=2
+- T0+25h 读到 0 → zero_count=3 → 标 exhausted=1
+- 中间任意一次读到 >0 → zero_count 归 0
+
+**注:** 这个逻辑依赖"用户每天都打开 keys.html"才能累计 strike;如果两次 quota-all 调用相隔 > 12h,自然累计。如果用户一天点 100 次刷新,每次都 0,只算 1 次(因为 12h 间隔限制)。
 
 ### 2. `POST /admin/sub-accounts/{sub_id}/api-keys/import-excel`
 
@@ -246,9 +306,9 @@ async def _fetch_one_key(r: dict) -> tuple:
 ```
 
 **响应 400:**
-- 行数 > 100 → `{"detail": "行数超过 100 上限"}`
 - 表头识别失败 → `{"detail": "未找到 API名称 / API key 列"}`
 - 文件非 xlsx → `{"detail": "仅支持 .xlsx 格式"}`
+- (无行数上限,大文件由 server 内存承担风险 — 见 §风险)
 
 **实现:**
 ```python
@@ -268,8 +328,6 @@ def import_keys_xlsx(sub_id: int, file: UploadFile = File(...),
     wb = load_workbook(file.file, read_only=True)
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
-    if len(rows) > 101:  # 100 数据 + 1 表头
-        raise HTTPException(400, "行数超过 100 上限")
     if not rows:
         raise HTTPException(400, "Excel 为空")
 
@@ -324,69 +382,113 @@ def download_template(x_token: str = Header(default="")):
 
 ---
 
-## providers.py — Parser Registry
+## providers.py — 通用 JSON 提取器
 
-新建文件 `server/providers.py`(或直接 `providers.py` 在项目根);通过 `PARSERS` dict 注册。
+**没有 per-provider Python 代码。** 所有 provider 都通过 Modal A 配置 dot-path 提取(如 `total_granted` 或 `data.balance.amount`)。
+
+新建文件 `providers.py`(项目根):
 
 ```python
-"""供应商响应解析器 registry。
+"""通用 JSON dot-path 提取器。
 
-每个 parser 签名:
-    parse(resp_json: dict | list, kind: str) -> float | None
-其中 kind 是 "total" | "balance" | "used"。
+签名:
+    extract_json_value(json_obj, path: str) -> float | None
 
-如果某个 kind 在该供应商响应里不存在,返回 None。
+path 例:
+  "total_granted"       → json["total_granted"]
+  "data.balance"        → json["data"]["balance"]
+  "credit.0.amount"     → json["credit"][0]["amount"]   (支持数组下标)
+  ""                    → None
+
+提取后强制转 float;转不了 / 路径不存在 / 中间 None → 返回 None。
 """
 
-def parse_yibu(resp_json, kind: str):
-    """Yibu API(OpenAI 兼容,信用额度接口)。
-    示例响应(/v1/dashboard/billing/credit_grants):
-      {"total_granted": 100, "total_used": 20.5, "total_available": 79.5}
-    """
-    if not isinstance(resp_json, dict):
+def extract_json_value(json_obj, path):
+    if not path:
         return None
-    if kind == "total":
-        return resp_json.get("total_granted")
-    if kind == "balance":
-        return resp_json.get("total_available")
-    if kind == "used":
-        return resp_json.get("total_used")
-    return None
-
-
-def parse_anthropic(resp_json, kind: str):
-    """占位 — 实际 Anthropic 没有公开余额接口,Spec 2 暂不支持。"""
-    return None
-
-
-# 注册表
-PARSERS = {
-    "yibu":      parse_yibu,
-    "一步":      parse_yibu,    # 现有数据有别名
-    "anthropic": parse_anthropic,
-}
+    if json_obj is None:
+        return None
+    cur = json_obj
+    for p in path.split("."):
+        if cur is None:
+            return None
+        if isinstance(cur, list):
+            try:
+                cur = cur[int(p)]
+            except (ValueError, IndexError):
+                return None
+        elif isinstance(cur, dict):
+            cur = cur.get(p)
+        else:
+            return None
+    if cur is None:
+        return None
+    try:
+        return float(cur)
+    except (TypeError, ValueError):
+        return None
 ```
 
-**新增 provider 流程:**
-1. 在 `providers.py` 加一个 `parse_xxx` 函数
-2. 在 `PARSERS` dict 加一条
-3. server 重启
-4. 管理员在 Modal A 选这个 provider,填好 base_url + 3 个 path,保存
+**新增 provider 流程(完全前端):**
+1. 管理员在 Modal A 选/填 provider
+2. 填 base_url、后端网址、3 个接口 URL path
+3. 填 3 个对应的 JSON 提取 path(如 `total_granted` / `total_available` / `total_used`)
+4. 保存
 
-**未注册 provider 的处理:**
-`PARSERS.get(provider)` 返回 None → `_fetch_one_key` 抛 `RuntimeError("未知 provider")` → quota-all 端点的 `results[id] = {"error": "未知 provider"}`,前端表格那行显示 hover error。
+无需写代码、无需 server 重启,所有信息都在 DB 里。
+
+**`provider` 字段的角色变化:** 从"决定用哪个 parser 的 key"降级为**纯标签**(用于分组、筛选、自动填模板)。`PARSERS` dict 不存在了。
 
 ---
 
 ## UI 改造(`pages/keys.html`)
 
-### Modal A — 标签微调
+### Modal A — 标签微调 + 加 JSON 路径输入
 
 | 旧字段 label | 新 label |
 |---|---|
 | `费用接口` | `已用接口` |
 
 字段名(`cost_path`)不动。
+
+**新增 3 个 JSON 路径输入框**(每个接口 URL 旁边一个):
+
+```
+[总额接口 URL]    [/v1/dashboard/billing/credit_grants]
+[总额 JSON 字段]   [total_granted]                                ← 新增
+
+[余额接口 URL]    [/v1/dashboard/billing/credit_grants]
+[余额 JSON 字段]   [total_available]                              ← 新增
+
+[已用接口 URL]    [/v1/dashboard/billing/credit_grants]
+[已用 JSON 字段]   [total_used]                                   ← 新增
+```
+
+**说明文字:**(在 Modal 顶部加一行小字)
+> JSON 字段支持点号嵌套(如 `data.balance`)和数组下标(如 `items.0.amount`)
+
+提交时 body 加 3 个新字段:
+```javascript
+const body = {
+  // ... 现有
+  quota_total_path:      ...,
+  quota_total_json_path: document.getElementById('aQuotaJsonPath').value.trim(),
+  balance_path:          ...,
+  balance_json_path:     document.getElementById('aBalanceJsonPath').value.trim(),
+  cost_path:             ...,
+  cost_json_path:        document.getElementById('aCostJsonPath').value.trim(),
+};
+```
+
+后端 `AccountIn` Pydantic 加 3 个对应字段(默认空字符串):
+
+```python
+class AccountIn(BaseModel):
+    # ... 现有
+    quota_total_json_path: str = ""
+    balance_json_path:     str = ""
+    cost_json_path:        str = ""
+```
 
 ### Modal A — 供应商自动填(C1, C4 = iii 提示)
 
@@ -400,16 +502,20 @@ aProvider.addEventListener('change', () => {
   if (!matches.length) return;
   const tpl = matches[0];  // 取最近的(列表已 ORDER BY id DESC)
   // 检查当前用户是否已填了字段
-  const fields = ['aBaseUrl','aBackend','aQuotaPath','aBalancePath','aCostPath'];
+  const fields = ['aBaseUrl','aBackend','aQuotaPath','aQuotaJsonPath',
+                  'aBalancePath','aBalanceJsonPath','aCostPath','aCostJsonPath'];
   const anyFilled = fields.some(id => document.getElementById(id).value.trim());
   if (anyFilled && !confirm(
     `检测到 provider "${v}" 已有 ${matches.length} 个帐号,应用其模板会覆盖你已填的字段?`
   )) return;
-  document.getElementById('aBaseUrl').value     = tpl.base_url || '';
-  document.getElementById('aBackend').value     = tpl.provider_backend_url || '';
-  document.getElementById('aQuotaPath').value   = tpl.quota_total_path || '';
-  document.getElementById('aBalancePath').value = tpl.balance_path || '';
-  document.getElementById('aCostPath').value    = tpl.cost_path || '';
+  document.getElementById('aBaseUrl').value          = tpl.base_url || '';
+  document.getElementById('aBackend').value          = tpl.provider_backend_url || '';
+  document.getElementById('aQuotaPath').value        = tpl.quota_total_path || '';
+  document.getElementById('aQuotaJsonPath').value    = tpl.quota_total_json_path || '';
+  document.getElementById('aBalancePath').value      = tpl.balance_path || '';
+  document.getElementById('aBalanceJsonPath').value  = tpl.balance_json_path || '';
+  document.getElementById('aCostPath').value         = tpl.cost_path || '';
+  document.getElementById('aCostJsonPath').value     = tpl.cost_json_path || '';
 });
 ```
 
@@ -530,12 +636,16 @@ document.getElementById('kTplLink').addEventListener('click', async (e) => {
 ### 1. 单元测试 — `tests/test_providers.py`(新)
 
 ```python
-# parser 行为
-def test_parse_yibu_total(): ...
-def test_parse_yibu_balance(): ...
-def test_parse_yibu_used(): ...
-def test_parse_yibu_unknown_kind_returns_none(): ...
-def test_parser_for_unknown_provider(): ...
+# 通用 dot-path 提取器行为
+def test_extract_simple_key():           # {"a":1}, "a" → 1.0
+def test_extract_nested():               # {"a":{"b":2}}, "a.b" → 2.0
+def test_extract_array_index():          # {"a":[10,20]}, "a.1" → 20.0
+def test_extract_missing_path():         # {"a":1}, "x" → None
+def test_extract_through_none():         # {"a":None}, "a.b" → None
+def test_extract_empty_path():           # any, "" → None
+def test_extract_non_numeric():          # {"a":"hi"}, "a" → None
+def test_extract_int_to_float():         # {"a":5}, "a" → 5.0
+def test_extract_list_invalid_index():   # {"a":[1]}, "a.5" → None
 ```
 
 ### 2. 端点测试 — 扩展 `tests/test_admin.py`
@@ -544,16 +654,21 @@ def test_parser_for_unknown_provider(): ...
 class TestQuotaAll:
     - 无 token → 401
     - 用户视野空 (无 accounts) → results={} 不报错
-    - exhausted=1 的 key 直接读缓存,不发外部请求(用 monkeypatch 验证 httpx 没被调用)
-    - 非 exhausted 的 key 调 _fetch_one_key(monkeypatch parser 返回固定值)
-    - balance=0 触发 exhausted=1 + 写 last_*
+    - exhausted=1 的 key 直接读缓存,不发外部请求(monkeypatch 验证 httpx 没被调用)
+    - 非 exhausted 的 key 调 _fetch_one_key(monkeypatch httpx 返回固定 JSON)
+    - balance=0 第一次:zero_count=1,不 exhausted
+    - 第二次 0(同次调用模拟 12h+ 后):zero_count=2
+    - 第三次 0:exhausted=1 + 写 last_*
+    - 12h 内重复 0:zero_count 不再加
+    - 中间一次非 0:zero_count 归 0
     - 部分接口失败仍返回 partial=true + 部分字段有值
     - 全部接口失败 → results[id] = {"error": "..."}
+    - JSON path 取不到字段 → 该字段 None,partial=true
 
 class TestImportExcel:
     - 上传 .xlsx 5 行,2 重复,1 空名 → imported=2, skipped=2, errors=1
     - 上传 .csv → 400
-    - 上传 200 行 → 400 行数超限
+    - 上传 1000 行(无上限)→ 处理完(虽然慢)
     - 上传无表头匹配 → 400
     - 表头大写 / 含空格 → d2 仍能识别
 
@@ -577,7 +692,7 @@ class TestTemplate:
   □ 下载模板 → 拿到 .xlsx 文件,用 Excel/numbers 打开看到表头
   □ 模板加几行数据 + 1 行重复 → 导入 → 看到 "导入 N 条,跳过 M 条" 提示
   □ 上传 .csv → 400 错误显示
-  □ 上传超 100 行 → 400 错误
+  □ 上传 1000 行(无上限) → 处理完(可能慢)
 □ /chat /configs/{id}/models claude.html 仍能聊天
 □ pytest 全绿
 ```
@@ -591,7 +706,9 @@ class TestTemplate:
 | `api_keys.last_balance` | Spec 2 已写 | Spec 3 自动分配"严格等于"算法直接读它做匹配,**无需重新外发请求** |
 | `api_keys.exhausted` | Spec 2 用 | Spec 3 跳过 exhausted=1 的候选 |
 | `quota-all` 聚合端点 | Spec 2 已建 | Spec 3 申请审核时调一次得全局快照 |
-| `providers.PARSERS` | Spec 2 dict | Spec 3 不动 |
+| `providers.extract_json_value` | Spec 2 通用提取器 | Spec 3 不动 |
+| `accounts.{quota_total,balance,cost}_json_path` | Spec 2 收集 | Spec 3 不动 |
+| `api_keys.{zero_count, last_zero_at}` | Spec 2 用于 3-strike | Spec 3 不动 |
 
 ---
 
@@ -600,11 +717,13 @@ class TestTemplate:
 | 风险 | 缓解 |
 |---|---|
 | 100 个 key × 3 接口 = 300 并发 GET,可能超过 fd / asyncio 默认上限 | 当前规模(3 个 key)无问题;到达上限再加 `asyncio.Semaphore(50)` 限流 |
-| 供应商接口 SCHEMA 变更,parser 静默返回 None | 表格 hover 会显示"返回字段缺失"或解析异常;管理员注意到后改 parser |
+| 供应商接口 SCHEMA 变更,JSON path 取不到值 | 该字段返回 None,前端表格 hover 显示"字段缺失";管理员去 Modal A 改 JSON path |
 | `last_balance` 缓存可能过时(供应商外部消费)| Spec 2 接受这个 trade-off:正常 key 每次刷新,exhausted 是终态不再消费 |
-| 导入 Excel 复用 `create_api_key` 是同步 + 用 `x_token` header | 性能 OK(100 行内);保留同步逻辑避免新写并发版本 |
+| Excel 不设行数上限,大文件可能 OOM / 长阻塞 | 用户明确选择;100k 行级 Excel 如果遇到问题再加 `Semaphore` 或 streaming 解析 |
+| 导入 Excel 复用 `create_api_key` 是同步;1000 行预计 1-2 秒,10k 行可能 10s+ 阻塞 worker | 大文件场景再考虑后台任务或分批 |
 | Modal A 的"覆盖"提示 = `confirm()` 原生对话框 UX 一般 | 现有 keys.html 也用 `confirm()`,保持一致;Spec 3 可统一升级 |
-| `parse_anthropic` 占位返回 None,无效 | Anthropic 没有公开余额接口;实际部署若需要,可加自定义 endpoint 或代理层。Spec 2 不强制 |
+| 3-strike exhausted 依赖"用户每天打开页面累计 strike";若 7 天无人访问,虽 key 已用完 1 周也不会标 exhausted | 接受 — 没人访问时 exhausted 标不标也不影响业务 |
+| JSON path 不支持复杂 jq 语法(过滤、聚合)| Spec 2 只做 dot + 数组下标;未来需要再升级到 jq |
 
 ---
 
