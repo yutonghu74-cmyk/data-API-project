@@ -6,7 +6,21 @@
   <title>批量处理 — 数据平台</title>
   <link rel="stylesheet" href="../assets/css/platform.css">
   <script>if(new URLSearchParams(location.search).get('embed')==='1')document.documentElement.classList.add('embed-mode');</script>
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <!-- xlsx 库改为按需懒加载(原同步引入 ≈944KB 阻塞首屏);见 ensureXLSX() -->
+  <script>
+    window.ensureXLSX = function () {
+      if (window.XLSX) return Promise.resolve();
+      if (window._xlsxLoading) return window._xlsxLoading;
+      window._xlsxLoading = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js';
+        s.onload  = () => resolve();
+        s.onerror = () => { window._xlsxLoading = null; reject(new Error('xlsx 加载失败')); };
+        document.head.appendChild(s);
+      });
+      return window._xlsxLoading;
+    };
+  </script>
   <!-- Monaco Editor（懒加载，进入脚本 Tab 时初始化）-->
   <script>var require = { paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } };</script>
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
@@ -52,6 +66,20 @@
 
     .section-title { font-size: .92rem; font-weight: 500; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
     .section-title:first-child { margin-top: 0; }
+
+    /* ── 数据来源切换 (文件 / 数据集) ────────────────────── */
+    .src-toggle {
+      display:flex; gap:0; margin-bottom:10px;
+      border:1px solid var(--border); border-radius:var(--radius);
+      overflow:hidden; width:fit-content;
+    }
+    .src-toggle-btn {
+      padding:6px 14px; font-size:.85rem; cursor:pointer;
+      border:none; background:#fff; color:var(--text-muted);
+    }
+    .src-toggle-btn.active { background:var(--green-bg); color:var(--green); font-weight:500; }
+    .src-toggle-btn + .src-toggle-btn { border-left:1px solid var(--border); }
+    .dataset-meta { font-size:.78rem; color:var(--text-muted); margin-top:6px; }
 
     /* ── 表单校验红色提示 ────────────────────────────────── */
     .field-invalid { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
@@ -145,14 +173,6 @@
       border-right:1px solid var(--border); padding:10px; gap:8px; overflow:hidden;
     }
     .script-right { flex:1; display:flex; flex-direction:column; min-width:0; }
-    .script-file-drop {
-      border:2px dashed var(--border); border-radius:var(--radius);
-      padding:8px 14px; cursor:pointer; text-align:center;
-      font-size:.83rem; color:var(--text-muted); transition:border-color .15s;
-    }
-    .script-file-drop:hover,.script-file-drop.dragover {
-      border-color:var(--green); color:var(--green); background:var(--green-bg);
-    }
     .script-config { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; flex-shrink:0; }
     .script-config .form-group label { font-size:.74rem; }
     .script-editor-container {
@@ -218,16 +238,29 @@
         <!-- 左侧:配置 -->
         <div class="click-left">
           <div class="section-title">任务名称</div>
-          <div class="form-group">
-            <input id="taskName" placeholder="例如 2026-05-18_产品评论分析（留空则用 YYYY-MM-DD_NA）">
+          <div class="form-group" style="margin-bottom:4px">
+            <input id="taskName" autocomplete="off" placeholder="例如 2026-05-18_产品评论分析（留空则用 YYYY-MM-DD_NA）">
           </div>
 
-          <div class="section-title">上传文件</div>
-          <div class="form-group">
-            <label>选择文件 <span style="color:var(--text-muted);font-weight:400">（支持 CSV / Excel / JSON）</span></label>
-            <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.json" style="padding:6px">
+          <div class="section-title" style="margin-top:6px">数据来源</div>
+          <div class="src-toggle" id="clickSrcToggle">
+            <button type="button" class="src-toggle-btn active" data-src="file">📂 上传文件</button>
+            <button type="button" class="src-toggle-btn" data-src="dataset">📊 已有数据集</button>
           </div>
-          <div id="fileInfo" style="font-size:.85rem;color:var(--text-muted);margin-top:8px"></div>
+          <div id="clickFileSrc">
+            <div class="form-group">
+              <label>选择文件 <span style="color:var(--text-muted);font-weight:400">（支持 CSV / Excel / JSON / Parquet）</span></label>
+              <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.json,.parquet" style="padding:6px">
+            </div>
+            <div id="fileInfo" style="font-size:.85rem;color:var(--text-muted);margin-top:8px"></div>
+          </div>
+          <div id="clickDatasetSrc" style="display:none">
+            <div class="form-group">
+              <label>选择数据集</label>
+              <select id="clickDatasetSel"><option value="">— 请选择 —</option></select>
+            </div>
+            <div id="clickDatasetInfo" class="dataset-meta"></div>
+          </div>
           <div class="preview-table" id="previewTable"></div>
 
           <div class="section-title">选择字段</div>
@@ -267,7 +300,7 @@
         <div class="click-right">
           <div class="click-out-tabs">
             <button class="click-out-tab active" data-cout="log">运行日志</button>
-            <button class="click-out-tab" data-cout="result">结果</button>
+            <button class="click-out-tab" data-cout="result">结果文件</button>
           </div>
           <div class="click-out-panel active" id="clickOutLog">
             <div class="click-progress" id="batchProgressCard" style="display:none">
@@ -297,28 +330,30 @@
     <div class="tab-panel" id="tab-script">
       <div class="script-layout">
         <div class="script-left">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;flex-shrink:0">
-            <div class="form-group" style="margin:0">
-              <label style="font-size:.74rem">任务名称</label>
-              <input id="scriptTaskName" placeholder="例如 2026-05-18_产品评论分析（留空则用 YYYY-MM-DD_NA）">
-            </div>
-            <div class="form-group" style="margin:0">
-              <label style="font-size:.74rem">任务ID（运行后由系统分配）</label>
-              <input id="scriptTaskIdPreview" disabled placeholder="—" style="background:var(--surface);color:var(--text-muted);font-family:monospace">
-            </div>
+          <div class="form-group" style="margin:0;flex-shrink:0">
+            <label style="font-size:.74rem">任务名称</label>
+            <input id="scriptTaskName" autocomplete="off" placeholder="例如 2026-05-18_产品评论分析（留空则用 YYYY-MM-DD_NA）">
           </div>
           <div id="scriptFileArea">
-            <input type="file" id="scriptFileInput"
-                   accept=".parquet,.json,.csv,.xlsx,.xls" style="display:none">
-            <div class="script-file-drop" id="scriptFileDrop">
-              <div>📂 拖拽或点击上传数据文件</div>
-              <div style="font-size:.73rem;color:var(--text-muted)">.parquet / .json / .csv / .xlsx</div>
+            <div class="src-toggle" id="scriptSrcToggle">
+              <button type="button" class="src-toggle-btn active" data-src="file">📂 上传文件</button>
+              <button type="button" class="src-toggle-btn" data-src="dataset">📊 已有数据集</button>
             </div>
-            <div id="scriptFileInfo" style="display:none;align-items:center;padding:6px 2px;gap:8px">
-              <span id="scriptFileName" style="font-size:.82rem;font-weight:500"></span>
-              <span id="scriptFileStats" style="font-size:.75rem;color:var(--text-muted)"></span>
-              <button class="btn btn-secondary" id="scriptFileClear"
-                      style="padding:2px 8px;font-size:.75rem">✕</button>
+            <div id="scriptFileSrc">
+              <div class="form-group">
+                <label>选择文件 <span style="color:var(--text-muted);font-weight:400">（支持CSV、excel、JSON、Parquet）</span></label>
+                <input type="file" id="scriptFileInput"
+                       accept=".csv,.xlsx,.xls,.json,.parquet" style="padding:6px">
+              </div>
+              <div id="scriptFileInfo" style="font-size:.85rem;color:var(--text-muted);margin-top:8px"></div>
+            </div>
+            <div id="scriptDatasetSrc" style="display:none">
+              <div class="form-group" style="margin:0">
+                <select id="scriptDatasetSel" style="width:100%">
+                  <option value="">— 请选择数据集 —</option>
+                </select>
+              </div>
+              <div id="scriptDatasetInfo" class="dataset-meta"></div>
             </div>
           </div>
           <div class="script-config">
@@ -526,10 +561,10 @@ function exitHistoricalView() {
     const sms = document.getElementById('scriptModelSel');
     if (sms) sms.value = '';
     window._uploadedFileId = null;
-    const sfDrop = document.getElementById('scriptFileDrop');
     const sfInfo = document.getElementById('scriptFileInfo');
-    if (sfDrop) sfDrop.style.display = '';
-    if (sfInfo) sfInfo.style.display = 'none';
+    if (sfInfo) { sfInfo.textContent = ''; sfInfo.style.color = ''; }
+    const sfInput = document.getElementById('scriptFileInput');
+    if (sfInput) sfInput.value = '';
     window._clearScriptOutput?.();
   } catch {}
   _inHistoricalView = false;
@@ -564,8 +599,11 @@ function defaultTaskName() {
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_NA`;
 }
 function clickConfigJson() {
+  const src = window._clickSrcMode || 'file';
   return {
-    input_file: window._currentInputFile || '',
+    source: src,
+    input_file: src === 'file'    ? (window._currentInputFile || '') : '',
+    dataset_id: src === 'dataset' ? (window._currentDatasetId || '') : '',
     selected_fields: selectedFields,
     prompt_template: document.getElementById('promptTemplate')?.value || '',
     provider: document.getElementById('providerSelect')?.value || '',
@@ -577,8 +615,9 @@ function clickConfigJson() {
 
 // 重置点击配置 Tab 到默认状态
 function resetClickConfigForm() {
-  rows = []; headers = []; selectedFields = [];
+  rows = []; headers = []; selectedFields = []; _inputRowCount = 0;
   window._currentInputFile = '';
+  window._currentDatasetId = '';
   document.getElementById('taskName').value = '';
   document.getElementById('fileInfo').textContent = '';
   document.getElementById('previewTable').innerHTML = '';
@@ -586,6 +625,9 @@ function resetClickConfigForm() {
   document.getElementById('availableFields').textContent = '—';
   document.getElementById('promptTemplate').value = '';
   const fi = document.getElementById('fileInput'); if (fi) fi.value = '';
+  const ds = document.getElementById('clickDatasetSel'); if (ds) ds.value = '';
+  const dsi = document.getElementById('clickDatasetInfo'); if (dsi) dsi.textContent = '';
+  setClickSrcMode('file');
   updateStartBtn();
 }
 
@@ -596,6 +638,15 @@ async function loadConfigIntoClickForm(cfg, taskName) {
   document.getElementById('promptTemplate').value = cfg.prompt_template || '';
   selectedFields = cfg.selected_fields || [];
   window._currentInputFile = cfg.input_file || '';
+  window._currentDatasetId = cfg.dataset_id || '';
+  // 老 job 没 source 字段时,看 dataset_id 兜底
+  const inferredSrc = cfg.source || (cfg.dataset_id ? 'dataset' : 'file');
+  setClickSrcMode(inferredSrc);
+  if (inferredSrc === 'dataset' && cfg.dataset_id) {
+    await ensureClickDatasetsLoaded();
+    const sel = document.getElementById('clickDatasetSel');
+    if (sel) sel.value = cfg.dataset_id;
+  }
   document.getElementById('availableFields').innerHTML =
     selectedFields.length ? selectedFields.map(f => `<code>{${f}}</code>`).join(' ') : '—';
   const list = document.getElementById('fieldList');
@@ -628,14 +679,13 @@ async function loadConfigIntoClickForm(cfg, taskName) {
 // 用历史 job 的 script_code 回填脚本 Tab
 async function loadScriptIntoEditor(scriptCode, taskName, cfg = {}, jobId = null) {
   document.getElementById('scriptTaskName').value = taskName || '';
-  document.getElementById('scriptTaskIdPreview').value = jobId ? String(jobId) : '';
   if (window.monacoEditor) {
     monacoEditor.setValue(scriptCode || '');
   } else {
     window._pendingScriptCode = scriptCode || '';
   }
-  // 用历史 cfg 回填 供应商 / 配置 / 模型 / 文件
-  if (cfg && (cfg.provider || cfg.input_file)) {
+  // 用历史 cfg 回填 供应商 / 配置 / 模型 / 文件 / 数据集
+  if (cfg && (cfg.provider || cfg.input_file || cfg.dataset_id)) {
     if (window._loadScriptConfigs && !window._getScriptConfigs?.()?.length) {
       await window._loadScriptConfigs();
     }
@@ -650,14 +700,21 @@ async function loadScriptIntoEditor(scriptCode, taskName, cfg = {}, jobId = null
         if (cfg.model) document.getElementById('scriptModelSel').value = cfg.model;
       }
     }
-    if (cfg.input_file) {
+    const inferredSrc = cfg.source || (cfg.dataset_id ? 'dataset' : 'file');
+    if (window.setScriptSrcMode) window.setScriptSrcMode(inferredSrc);
+    if (inferredSrc === 'dataset' && cfg.dataset_id) {
+      if (window.ensureScriptDatasetsLoaded) await window.ensureScriptDatasetsLoaded();
+      const sel = document.getElementById('scriptDatasetSel');
+      if (sel) {
+        sel.value = cfg.dataset_id;
+        window._scriptDatasetId = cfg.dataset_id;
+        document.getElementById('scriptDatasetInfo').textContent = '(沿用历史数据集)';
+      }
+    } else if (cfg.input_file) {
       window._uploadedFileId = cfg.input_file;
-      document.getElementById('scriptFileDrop').style.display = 'none';
       const fi = document.getElementById('scriptFileInfo');
-      fi.style.display = 'flex';
-      document.getElementById('scriptFileName').textContent = cfg.input_file.split('/').pop();
-      const st = document.getElementById('scriptFileStats');
-      st.textContent = '(沿用历史文件)'; st.style.color = '';
+      fi.textContent = `(沿用历史文件: ${cfg.input_file.split('/').pop()})`;
+      fi.style.color = '';
     }
   }
   // 默认调出运行日志(从历史拉)
@@ -700,6 +757,8 @@ let results = [];
 let running = false;
 let stopFlag = false;
 let _postProcessor = null;
+// 输入行数:CSV/JSON/Excel 走 rows.length;parquet 走服务器返回的 rows 字段
+let _inputRowCount = 0;
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -731,19 +790,25 @@ document.getElementById('fileInput').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const ext = file.name.split('.').pop().toLowerCase();
+  const isParquet = ext === 'parquet';
   try {
     if (ext === 'csv') rows = await parseCsv(file);
     else if (ext === 'json') rows = await parseJson(file);
     else if (['xlsx','xls'].includes(ext)) rows = await parseExcel(file);
+    else if (isParquet) rows = [];               // parquet 本地不解析,等服务器返回列名
     else { alert('不支持的文件格式'); return; }
     headers = rows.length ? Object.keys(rows[0]) : [];
-    document.getElementById('fileInfo').textContent =
-      `已解析 ${rows.length} 行，${headers.length} 列：${headers.join('、')}`;
-    renderPreview();
-    renderFieldSelector();
+    _inputRowCount = rows.length;
+    document.getElementById('fileInfo').textContent = isParquet
+      ? '上传中…(parquet 由服务器解析列结构)'
+      : `已解析 ${rows.length} 行，${headers.length} 列：${headers.join('、')}`;
+    if (!isParquet) {
+      renderPreview();
+      renderFieldSelector();
+    }
     updateStartBtn();
 
-    // 同时上传到服务器,获得服务器路径供脚本使用
+    // 上传到服务器:其他格式拿 file_id,parquet 额外用服务器返回的列名 + 行数补齐 UI
     try {
       const form = new FormData(); form.append('file', file);
       const tk = localStorage.getItem('platform_token') || '';
@@ -753,8 +818,21 @@ document.getElementById('fileInput').addEventListener('change', async (e) => {
       if (res.ok) {
         const d = await res.json();
         window._currentInputFile = d.file_id;
+        if (isParquet) {
+          headers = d.col_names || [];
+          _inputRowCount = d.rows || 0;
+          document.getElementById('fileInfo').textContent =
+            `parquet 已上传:${_inputRowCount} 行,${headers.length} 列:${headers.join('、')}(parquet 暂不显示本地预览)`;
+          document.getElementById('previewTable').innerHTML = '';
+          renderFieldSelector();
+          updateStartBtn();
+        }
+      } else if (isParquet) {
+        document.getElementById('fileInfo').textContent = 'parquet 上传失败,无法继续';
       }
-    } catch {}
+    } catch {
+      if (isParquet) document.getElementById('fileInfo').textContent = 'parquet 上传失败,无法继续';
+    }
   } catch(e) {
     document.getElementById('fileInfo').textContent = `解析失败：${e.message}`;
   }
@@ -792,7 +870,8 @@ function parseJson(file) {
   });
 }
 
-function parseExcel(file) {
+async function parseExcel(file) {
+  await window.ensureXLSX();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = e => {
@@ -836,8 +915,115 @@ function renderFieldSelector() {
 }
 
 function updateStartBtn() {
-  document.getElementById('startBatchBtn').disabled = !(rows.length && selectedFields.length);
+  document.getElementById('startBatchBtn').disabled = !(_inputRowCount && selectedFields.length);
 }
+
+// ── 数据来源切换 (前端配置 Tab) ─────────────────────────
+window._clickSrcMode = 'file';
+window._currentDatasetId = '';
+let _clickDatasetsLoaded = false;
+
+function setClickSrcMode(mode) {
+  mode = (mode === 'dataset') ? 'dataset' : 'file';
+  window._clickSrcMode = mode;
+  document.querySelectorAll('#clickSrcToggle .src-toggle-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.src === mode);
+  });
+  document.getElementById('clickFileSrc').style.display    = mode === 'file'    ? '' : 'none';
+  document.getElementById('clickDatasetSrc').style.display = mode === 'dataset' ? '' : 'none';
+  // 清除两侧"上传文件/数据来源" section title 的校验红色提示
+  document.querySelectorAll('#tab-click-config .section-title.field-invalid')
+    .forEach(t => { if (t.textContent.trim() === '数据来源') t.classList.remove('field-invalid'); });
+}
+
+async function ensureClickDatasetsLoaded(force = false) {
+  if (_clickDatasetsLoaded && !force) return;
+  const sel = document.getElementById('clickDatasetSel');
+  if (!sel) return;
+  try {
+    const res = await fetch('http://localhost:8000/datasets', { headers: authHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const items = await res.json();
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">— 请选择 —</option>' + items.map(d => {
+      const t = (d.created_at || '').toString().slice(0, 16);
+      return `<option value="${d.dataset_id}">${d.name} · ${d.row_count} 行 · ${t}</option>`;
+    }).join('');
+    if (prev) sel.value = prev;
+    _clickDatasetsLoaded = true;
+  } catch (e) {
+    sel.innerHTML = `<option value="">— 加载失败: ${e.message} —</option>`;
+  }
+}
+
+document.querySelectorAll('#clickSrcToggle .src-toggle-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const mode = btn.dataset.src;
+    setClickSrcMode(mode);
+    if (mode === 'dataset') {
+      await ensureClickDatasetsLoaded();
+      // 切回数据集模式且之前已选,重新刷预览
+      const sel = document.getElementById('clickDatasetSel');
+      if (sel?.value && window._currentDatasetId === sel.value) {
+        await applyClickDataset(sel.value);
+      } else if (!sel?.value) {
+        // 清空文件残留的预览
+        rows = []; headers = []; selectedFields = []; _inputRowCount = 0;
+        document.getElementById('previewTable').innerHTML = '';
+        document.getElementById('fieldList').innerHTML = '';
+        document.getElementById('availableFields').textContent = '—';
+        updateStartBtn();
+      }
+    } else {
+      // 切回 file:不强制清,留给用户重新选文件
+      if (!window._currentInputFile) {
+        rows = []; headers = []; selectedFields = []; _inputRowCount = 0;
+        document.getElementById('previewTable').innerHTML = '';
+        document.getElementById('fieldList').innerHTML = '';
+        document.getElementById('availableFields').textContent = '—';
+        updateStartBtn();
+      }
+    }
+  });
+});
+
+async function applyClickDataset(datasetId) {
+  if (!datasetId) {
+    window._currentDatasetId = '';
+    rows = []; headers = []; selectedFields = [];
+    document.getElementById('previewTable').innerHTML = '';
+    document.getElementById('fieldList').innerHTML = '';
+    document.getElementById('availableFields').textContent = '—';
+    document.getElementById('clickDatasetInfo').textContent = '';
+    updateStartBtn();
+    return;
+  }
+  const info = document.getElementById('clickDatasetInfo');
+  info.textContent = '加载中…';
+  try {
+    const res = await fetch(`http://localhost:8000/datasets/${encodeURIComponent(datasetId)}/rows`,
+      { headers: authHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    rows = Array.isArray(data) ? data : [];
+    headers = rows.length ? Object.keys(rows[0]) : [];
+    _inputRowCount = rows.length;
+    window._currentDatasetId = datasetId;
+    info.textContent = `已加载 ${rows.length} 行 · ${headers.length} 列：${headers.join('、')}`;
+    renderPreview();
+    renderFieldSelector();
+    updateStartBtn();
+  } catch (e) {
+    info.textContent = `加载失败: ${e.message}`;
+    rows = []; headers = []; selectedFields = [];
+    window._currentDatasetId = '';
+    updateStartBtn();
+  }
+}
+
+document.getElementById('clickDatasetSel').addEventListener('change', e => {
+  applyClickDataset(e.target.value);
+});
 
 // ── 任务配置：加载 API 列表 ──────────────────────────────
 let _batchConfigs = [];
@@ -909,16 +1095,16 @@ function _flagFieldInvalid(elemId, sectionText) {
   }
 }
 // 任意输入恢复时移除红色提示
-['promptTemplate','configSelect','modelSelect','taskName','fileInput'].forEach(id => {
+['promptTemplate','configSelect','modelSelect','taskName','fileInput','clickDatasetSel'].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
   const clear = () => {
     el.classList.remove('field-invalid');
     const grp = el.closest('.form-group');
     grp?.querySelectorAll('label.field-invalid').forEach(x => x.classList.remove('field-invalid'));
-    if (id === 'fileInput') {
+    if (id === 'fileInput' || id === 'clickDatasetSel') {
       document.querySelectorAll('#tab-click-config .section-title.field-invalid')
-        .forEach(t => { if (t.textContent.trim() === '上传文件') t.classList.remove('field-invalid'); });
+        .forEach(t => { if (t.textContent.trim() === '数据来源') t.classList.remove('field-invalid'); });
     }
     if (id === 'taskName') {
       document.querySelectorAll('#tab-click-config .section-title.field-invalid')
@@ -934,12 +1120,15 @@ async function startBatch() {
   const template  = document.getElementById('promptTemplate').value.trim();
   const requestId = document.getElementById('configSelect').value;
   const model     = document.getElementById('modelSelect').value;
-  const hasFile   = !!window._currentInputFile;
+  const mode      = window._clickSrcMode || 'file';
+  const hasSource = mode === 'dataset'
+    ? !!window._currentDatasetId
+    : !!window._currentInputFile;
   let invalid = false;
   if (!template)  { _flagFieldInvalid('promptTemplate'); invalid = true; }
   if (!requestId) { _flagFieldInvalid('configSelect');   invalid = true; }
   if (!model)     { _flagFieldInvalid('modelSelect');    invalid = true; }
-  if (!hasFile)   { _flagFieldInvalid(null, '上传文件'); invalid = true; }
+  if (!hasSource) { _flagFieldInvalid(null, '数据来源'); invalid = true; }
   if (invalid) return;
 
   document.getElementById('batchProgressCard').style.display = '';
@@ -1113,6 +1302,7 @@ async function autoSaveResults(format, path, taskName) {
   let mime, text, binary, ext;
   if (format === 'json') { mime='application/json'; text=JSON.stringify(results,null,2); binary=null; ext='json'; }
   else if (format === 'xlsx') {
+    await window.ensureXLSX();
     const ws = XLSX.utils.json_to_sheet(results);
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Results');
     binary = XLSX.write(wb, { bookType:'xlsx', type:'array' }); mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'; text=''; ext='xlsx';
@@ -1958,7 +2148,6 @@ Object.defineProperty(window, '_resetScriptEditor', {
   value: () => {
     if (monacoEditor) monacoEditor.setValue(TEMPLATE);
     document.getElementById('scriptTaskName').value = '';
-    document.getElementById('scriptTaskIdPreview').value = '';
   },
 });
 
@@ -1971,43 +2160,22 @@ document.querySelector('.tab-btn[data-tab="script"]')
 
 // ── 文件上传 ──────────────────────────────────────────────
 let uploadedFileId = null;
-const sFileDrop  = document.getElementById('scriptFileDrop');
 const sFileInput = document.getElementById('scriptFileInput');
 const sFileInfo  = document.getElementById('scriptFileInfo');
 
-sFileDrop.addEventListener('click', () => {
-  if (window._uploadConfirmed) { sFileInput.click(); return; }
-  window.gateUpload?.(() => sFileInput.click());
-});
-// 防御:直接拦截 #scriptFileInput 的 click(任何路径触发都会走闸门)
+// 拦截 #scriptFileInput 的 click,任何路径触发都走"上传前确认"闸门
 sFileInput.addEventListener('click', e => {
   if (window._uploadConfirmed) return;
   e.preventDefault();
   window.gateUpload?.(() => sFileInput.click());
 });
-sFileDrop.addEventListener('dragover',  e  => { e.preventDefault(); sFileDrop.classList.add('dragover'); });
-sFileDrop.addEventListener('dragleave', ()  => sFileDrop.classList.remove('dragover'));
-sFileDrop.addEventListener('drop', e => {
-  e.preventDefault(); sFileDrop.classList.remove('dragover');
-  const f = e.dataTransfer.files[0];
-  if (!f) return;
-  if (window._uploadConfirmed) { uploadScriptFile(f); return; }
-  window.gateUpload?.(() => uploadScriptFile(f));
-});
 sFileInput.addEventListener('change', () => {
   if (sFileInput.files[0]) uploadScriptFile(sFileInput.files[0]);
 });
-document.getElementById('scriptFileClear').addEventListener('click', () => {
-  uploadedFileId = null;
-  window._uploadedFileId = null;
-  sFileDrop.style.display = ''; sFileInfo.style.display = 'none'; sFileInput.value = '';
-});
 
 async function uploadScriptFile(file) {
-  sFileDrop.style.display = 'none'; sFileInfo.style.display = 'flex';
-  document.getElementById('scriptFileName').textContent = file.name;
-  const statsEl = document.getElementById('scriptFileStats');
-  statsEl.textContent = '上传中…'; statsEl.style.color = '';
+  sFileInfo.style.color = '';
+  sFileInfo.textContent = `上传中：${file.name}…`;
   const form = new FormData(); form.append('file', file);
   try {
     const token = localStorage.getItem('platform_token') || '';
@@ -2021,12 +2189,75 @@ async function uploadScriptFile(file) {
     uploadedFileId = d.file_id;
     window._uploadedFileId = d.file_id;
     const colPreview = (d.col_names || []).slice(0, 4).join(', ');
-    statsEl.textContent = `${d.rows.toLocaleString()} 行 · ${d.columns} 列 (${colPreview}${d.columns > 4 ? '…' : ''})`;
+    sFileInfo.textContent =
+      `${file.name} · ${d.rows.toLocaleString()} 行 · ${d.columns} 列 (${colPreview}${d.columns > 4 ? '…' : ''})`;
   } catch(e) {
-    statsEl.textContent = '上传失败：' + e.message;
-    statsEl.style.color = '#dc2626';
+    sFileInfo.textContent = '上传失败：' + e.message;
+    sFileInfo.style.color = '#dc2626';
   }
 }
+
+// ── 数据来源切换 (脚本配置 Tab) ─────────────────────────
+window._scriptSrcMode = 'file';
+window._scriptDatasetId = '';
+let _scriptDatasetsLoaded = false;
+
+function setScriptSrcMode(mode) {
+  mode = (mode === 'dataset') ? 'dataset' : 'file';
+  window._scriptSrcMode = mode;
+  document.querySelectorAll('#scriptSrcToggle .src-toggle-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.src === mode);
+  });
+  document.getElementById('scriptFileSrc').style.display    = mode === 'file'    ? '' : 'none';
+  document.getElementById('scriptDatasetSrc').style.display = mode === 'dataset' ? '' : 'none';
+}
+
+async function ensureScriptDatasetsLoaded(force = false) {
+  if (_scriptDatasetsLoaded && !force) return;
+  const sel = document.getElementById('scriptDatasetSel');
+  if (!sel) return;
+  try {
+    const res = await fetch('http://localhost:8000/datasets', { headers: authHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const items = await res.json();
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">— 请选择数据集 —</option>' + items.map(d => {
+      const t = (d.created_at || '').toString().slice(0, 16);
+      return `<option value="${d.dataset_id}">${d.name} · ${d.row_count} 行 · ${t}</option>`;
+    }).join('');
+    if (prev) sel.value = prev;
+    _scriptDatasetsLoaded = true;
+  } catch (e) {
+    sel.innerHTML = `<option value="">— 加载失败: ${e.message} —</option>`;
+  }
+}
+
+document.querySelectorAll('#scriptSrcToggle .src-toggle-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    setScriptSrcMode(btn.dataset.src);
+    if (btn.dataset.src === 'dataset') await ensureScriptDatasetsLoaded();
+  });
+});
+
+document.getElementById('scriptDatasetSel').addEventListener('change', async e => {
+  const id = e.target.value;
+  const info = document.getElementById('scriptDatasetInfo');
+  if (!id) { window._scriptDatasetId = ''; info.textContent = ''; return; }
+  info.textContent = '加载中…';
+  try {
+    // 只取前 5 行做轻量预览,不下载全量
+    const res = await fetch(`http://localhost:8000/datasets/${encodeURIComponent(id)}/rows`,
+      { headers: authHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rows = await res.json();
+    const heads = rows.length ? Object.keys(rows[0]) : [];
+    window._scriptDatasetId = id;
+    info.textContent = `已选 ${rows.length} 行 · ${heads.length} 列：${heads.join('、')}`;
+  } catch (err) {
+    info.textContent = `加载失败: ${err.message}`;
+    window._scriptDatasetId = '';
+  }
+});
 
 
 // ── 模型配置联动 ──────────────────────────────────────────
@@ -2140,7 +2371,13 @@ async function runScript() {
     provider: document.getElementById('scriptProviderSel').value,
     request_id: configId ? parseInt(configId) : null,
     model,
-    input_file: (window._uploadedFileId || uploadedFileId || ''),
+    source: (window._scriptSrcMode || 'file'),
+    input_file: (window._scriptSrcMode === 'dataset')
+      ? ''
+      : (window._uploadedFileId || uploadedFileId || ''),
+    dataset_id: (window._scriptSrcMode === 'dataset')
+      ? (window._scriptDatasetId || '')
+      : '',
   });
 
   try {
@@ -2243,8 +2480,6 @@ function handleScriptEvent(ev) {
     }
     case 'task_started': {
       appendScriptLog('info', `▶ 已创建批次 ${ev.batch_id} (job_id=${ev.job_id})\n`);
-      const idEl = document.getElementById('scriptTaskIdPreview');
-      if (idEl) idEl.value = ev.batch_id || '';
       break;
     }
   }
@@ -2275,6 +2510,8 @@ window._loadScriptConfigs = loadScriptConfigs;
 window._getScriptConfigs  = () => _scriptConfigs;
 window._appendScriptLog   = appendScriptLog;
 window._clearScriptOutput = clearScriptOutput;
+window.setScriptSrcMode          = setScriptSrcMode;
+window.ensureScriptDatasetsLoaded = ensureScriptDatasetsLoaded;
 
 })(); // initScriptEditor
 

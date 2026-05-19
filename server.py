@@ -2402,26 +2402,41 @@ def export_batch_job(job_id: int, token: str = "", x_token: str = Header(default
 
 def _gen_script_from_config(cfg: dict) -> str:
     """根据点击配置 config_json 生成 Python 脚本模板。"""
+    source     = (cfg.get("source") or "file").lower()
     input_file = cfg.get("input_file", "") or ""
+    dataset_id = cfg.get("dataset_id", "") or ""
     fields     = cfg.get("selected_fields") or []
     template   = cfg.get("prompt_template", "") or ""
+    # 老 job 没 source 字段时,只要有 dataset_id 就当 dataset
+    if source not in ("file", "dataset"):
+        source = "dataset" if dataset_id else "file"
     # 反斜杠用 raw 字符串规避
     fields_py = json.dumps(fields, ensure_ascii=False)
     template_py = json.dumps(template, ensure_ascii=False)
+    if source == "dataset":
+        load_block = (
+            f'DATASET_ID_LOCAL = "{dataset_id}"\n'
+            "df = load_dataset(DATASET_ID_LOCAL)\n"
+            'print(f"已加载 {len(df)} 行 (数据集 " + DATASET_ID_LOCAL + ")")'
+        )
+    else:
+        load_block = (
+            f'INPUT_FILE = r"{input_file}"\n'
+            'df = pd.read_excel(INPUT_FILE) if INPUT_FILE.endswith((".xlsx", ".xls")) else (\n'
+            '    pd.read_csv(INPUT_FILE) if INPUT_FILE.endswith(".csv") else\n'
+            '    pd.read_json(INPUT_FILE) if INPUT_FILE.endswith(".json") else\n'
+            '    pd.DataFrame()\n'
+            ')\n'
+            'print(f"已加载 {len(df)} 行")'
+        )
     return f'''# 自动生成的批跑脚本（来自点击配置）
 # 在「点击配置」修改任何字段会实时重生成此代码,除非你手动编辑过
 import os, json, pandas as pd
 
-INPUT_FILE       = r"{input_file}"
 SELECTED_FIELDS  = {fields_py}
 PROMPT_TEMPLATE  = {template_py}
 
-df = pd.read_excel(INPUT_FILE) if INPUT_FILE.endswith((".xlsx", ".xls")) else (
-    pd.read_csv(INPUT_FILE) if INPUT_FILE.endswith(".csv") else
-    pd.read_json(INPUT_FILE) if INPUT_FILE.endswith(".json") else
-    pd.DataFrame()
-)
-print(f"已加载 {{len(df)}} 行")
+{load_block}
 
 for i, row in df.iterrows():
     if i in _RESUME_DONE:    # 续跑时跳过已完成行
@@ -2602,6 +2617,7 @@ def batch_run(body: BatchRunIn, x_token: str = Header(default="")):
         "--request-id", str(request_id) if request_id else "",
         "--model",      model or "",
         "--file-path",  cfg.get("input_file", "") or "",
+        "--dataset-id", cfg.get("dataset_id", "") or "",
         "--timeout",    str(SCRIPT_TIMEOUT),
         "--job-id",     str(job_id),
         "--resume-done-csv", resume_done_csv,

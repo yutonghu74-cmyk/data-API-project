@@ -29,6 +29,7 @@ parser.add_argument('--job-id',     default='')
 parser.add_argument('--resume-done-csv', default='')
 parser.add_argument('--model',     default='')
 parser.add_argument('--file-path', default='')
+parser.add_argument('--dataset-id', default='')
 parser.add_argument('--timeout',   type=int, default=30)
 args = parser.parse_args()
 
@@ -49,7 +50,10 @@ def build_bootstrap() -> str:
         except Exception:
             resume_done_repr = "set()"
 
-    if args.file_path and os.path.exists(args.file_path):
+    if args.dataset_id:
+        # 来源:平台数据集。bootstrap 已注入 load_dataset(),直接调用
+        load_df = "df = load_dataset(DATASET_ID)"
+    elif args.file_path and os.path.exists(args.file_path):
         ext = pathlib.Path(args.file_path).suffix.lower()
         read_map = {
             '.parquet': f"df = _pd.read_parquet(r'{args.file_path}')",
@@ -77,6 +81,7 @@ _CFG_ID   = {config_id_val}
 _REQ_ID   = {request_id_val}
 _JOB_ID   = {job_id_val}
 _RESUME_DONE = {resume_done_repr}
+DATASET_ID = "{args.dataset_id}"
 
 # 安全 os 代理（只暴露文件路径操作，禁止 system/exec）
 class _SafeOS:
@@ -89,6 +94,21 @@ class _SafeOS:
     def join(self, *a): return _os.path.join(*a)
     def path_join(self, *a): return _os.path.join(*a)
 os = _SafeOS()
+
+def load_dataset(dataset_id):
+    """从平台数据集拉取行 → DataFrame。通过本机 GET /datasets/{{id}}/rows。"""
+    if not dataset_id:
+        return _pd.DataFrame()
+    conn = _hc.HTTPConnection("localhost", 8000, timeout=60)
+    conn.request("GET", f"/datasets/{{dataset_id}}/rows",
+                 headers={{"X-Token": _TOKEN}})
+    resp = conn.getresponse()
+    raw = resp.read()
+    conn.close()
+    if resp.status != 200:
+        raise RuntimeError(f"load_dataset 失败: HTTP {{resp.status}} {{raw[:200]!r}}")
+    rows = _json.loads(raw.decode("utf-8", errors="replace"))
+    return _pd.DataFrame(rows)
 
 {load_df}
 
