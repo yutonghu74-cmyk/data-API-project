@@ -14,12 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Git 规范
 每次提交必须清晰说明改动
-使用 feat/fix/refactor 格式
-feat: 新功能
-fix: 修复bug
-refactor: 重构代码
 
-# Git 提交规范
 使用 feat/fix/docs/style/refactor/test/chore 格式
 
 ## 项目简介
@@ -114,7 +109,7 @@ python server.py          # 监听 :8000
 - **TaskList 形式即可,不需要 step 1-5 ceremony**
 
 ## 用 executing-plans 时的减负规则
-- **CRUD 端点跳过 TDD** —— 标准 GET/POST/PUT/DELETE 不需要先写测试,只对**有非平凡逻辑**的端点(如去重、聚合、并发)写测试
+- CRUD 端点跳过 TDD —— 标准 GET/POST/PUT/DELETE 不需要先写测试,只对**有非平凡逻辑**的端点(如去重、聚合、并发)写测试
 - **测试只写 critical path** —— 不必每个错误分支都覆盖
 - **commit 频次** —— 一个相关任务集合一次 commit 即可,不需要每个 task 都 commit
 - **不要每次都跑全测试套件** —— 改了 X 模块就跑 X 相关 tests,最后再跑一次全套
