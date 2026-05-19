@@ -2,13 +2,14 @@ import os
 import sys
 import json
 import uuid
+import pathlib
 import anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
 
 import asyncio
-from fastapi import FastAPI, HTTPException, Header, UploadFile, Body
+from fastapi import FastAPI, HTTPException, Header, UploadFile, Body, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -171,9 +172,42 @@ def init_db():
                 created_at      TEXT NOT NULL
             )
         """)
+        # Spec 2: api_keys quota cache + 3-strike exhausted 计数
+        for col, defn in [
+            ("last_total",   "REAL"),
+            ("last_balance", "REAL"),
+            ("last_used",    "REAL"),
+            ("last_quota_at","TEXT"),
+            ("zero_count",   "INTEGER DEFAULT 0"),
+            ("last_zero_at", "TEXT"),
+            ("manager_user_id", "INTEGER REFERENCES users(id)"),
+            ("created_by",   "INTEGER REFERENCES users(id)"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE api_keys ADD COLUMN {col} {defn}")
+                conn.commit()
+            except Exception:
+                pass
+        # Spec 2: accounts 上每个接口的 JSON 提取路径
+        for col, defn in [
+            ("quota_total_json_path", "TEXT DEFAULT ''"),
+            ("balance_json_path",     "TEXT DEFAULT ''"),
+            ("cost_json_path",        "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} {defn}")
+                conn.commit()
+            except Exception:
+                pass
         # chat_sessions 兼容添加 pinned 字段
         try:
             conn.execute("ALTER TABLE chat_sessions ADD COLUMN pinned INTEGER DEFAULT 0")
+            conn.commit()
+        except Exception:
+            pass
+        # chat_messages 兼容添加 model 字段
+        try:
+            conn.execute("ALTER TABLE chat_messages ADD COLUMN model TEXT DEFAULT ''")
             conn.commit()
         except Exception:
             pass
@@ -204,10 +238,55 @@ def init_db():
                 error_msg   TEXT DEFAULT ''
             )
         """)
+        # batch_job_rows 兼容添加字段
+        for col, definition in [
+            ("output_type",  "TEXT DEFAULT 'text'"),
+            ("output_path",  "TEXT DEFAULT ''"),
+            ("label",        "TEXT DEFAULT ''"),
+            ("started_at",   "TEXT DEFAULT ''"),
+            ("finished_at",  "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE batch_job_rows ADD COLUMN {col} {definition}")
+            except Exception:
+                pass
+        # batch_jobs 兼容添加字段
+        for col, definition in [
+            ("settings_json", "TEXT DEFAULT ''"),
+            ("batch_id",      "TEXT DEFAULT ''"),
+            ("started_at",    "TEXT DEFAULT ''"),
+            ("finished_at",   "TEXT DEFAULT ''"),
+            ("task_id",       "INTEGER DEFAULT NULL"),
+            ("source_type",   "TEXT DEFAULT 'click'"),
+            ("script_code",   "TEXT DEFAULT ''"),
+            ("config_json",   "TEXT DEFAULT '{}'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE batch_jobs ADD COLUMN {col} {definition}")
+            except Exception:
+                pass
+
+        # tasks 表（任务 = 配置+脚本的容器；一个任务可有多次 run/batch_job）
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id         INTEGER REFERENCES users(id),
+                task_name       TEXT NOT NULL,
+                config_json     TEXT DEFAULT '{}',
+                script_code     TEXT DEFAULT '',
+                script_is_dirty INTEGER DEFAULT 0,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
+            )
+        """)
         # api_requests 兼容添加字段
         for col, definition in [
             ("sub_account_id", "INTEGER DEFAULT NULL"),
             ("cc_person",      "TEXT DEFAULT ''"),
+            ("account_id",     "INTEGER DEFAULT NULL"),
+            ("api_key_id",     "INTEGER DEFAULT NULL"),
+            ("dept",           "TEXT DEFAULT ''"),
+            ("reviewer_id",    "INTEGER DEFAULT NULL"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE api_requests ADD COLUMN {col} {definition}")
@@ -287,6 +366,8 @@ def _friendly_error(e: Exception) -> str:
             return f"模型不可用：{msg}\n请检查密钥管理中的模型名称是否正确。"
         if 'invalid api key' in raw.lower() or 'authentication' in raw.lower():
             return f"API Key 无效或已过期，请在密钥管理中重新配置。"
+        if 'invalid token' in raw.lower():
+            return f"供应商返回 Invalid token：{msg}\n如确认 Key 未过期，请检查 Base URL、模型名称是否匹配，或凭 request_id 联系供应商核查。"
         if 'rate limit' in raw.lower():
             return f"请求频率超限，请稍后再试。"
         if 'context_length' in raw.lower() or 'too long' in raw.lower():
@@ -332,6 +413,7 @@ class ChatRequest(BaseModel):
     model: str = "claude-sonnet-4-6"
     system: str = ""
     config_id: int | None = None
+    request_id: int | None = None
     user_token: str | None = None  # 用于记录调用用户
 
 @app.get("/health")
@@ -436,9 +518,20 @@ async def chat(req: ChatRequest):
 
     start_time = time.time()
     called_at  = datetime.now(timezone.utc).isoformat()
+    effective_key_id: int | None = req.config_id
 
     def generate():
-        _key, _base_url, _provider = get_config_credentials(req.config_id)
+        nonlocal effective_key_id
+        if req.request_id and req.user_token:
+            try:
+                _user = get_current_user(req.user_token)
+                _key, _base_url, _provider, _key_id = get_credentials_by_request(req.request_id, _user["id"])
+                effective_key_id = _key_id
+            except HTTPException as e:
+                yield f"data: {json.dumps({'error': e.detail})}\n\n"
+                return
+        else:
+            _key, _base_url, _provider = get_config_credentials(req.config_id)
         if not _key:
             yield f"data: {json.dumps({'error': '未配置 API Key，请在管理员面板添加配置'})}\n\n"
             return
@@ -527,13 +620,13 @@ async def chat(req: ChatRequest):
             error_msg = str(e)
             yield f"data: {json.dumps({'error': _friendly_error(e)})}\n\n"
         finally:
-            if req.config_id is not None:
+            if effective_key_id is not None:
                 duration_ms = int((time.time() - start_time) * 1000)
                 try:
                     with get_db() as conn:
                         # 获取该配置的定价
                         cfg = conn.execute(
-                            "SELECT price_input, price_output FROM api_configs WHERE id=?", (req.config_id,)
+                            "SELECT price_input, price_output FROM api_configs WHERE id=?", (effective_key_id,)
                         ).fetchone()
                         pi = cfg["price_input"]  if cfg else 0
                         po = cfg["price_output"] if cfg else 0
@@ -549,7 +642,7 @@ async def chat(req: ChatRequest):
 
                         conn.execute(
                             "INSERT INTO usage_stats (config_id,user_id,called_at,model,input_tokens,output_tokens,cost,success,duration_ms,error_msg) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                            (req.config_id, uid, called_at, req.model, input_tokens, output_tokens, cost, success, duration_ms, error_msg)
+                            (effective_key_id, uid, called_at, req.model, input_tokens, output_tokens, cost, success, duration_ms, error_msg)
                         )
                         conn.commit()
                 except Exception:
@@ -566,6 +659,9 @@ class AccountIn(BaseModel):
     quota_total_path: str = ""
     balance_path: str = ""
     cost_path: str = ""
+    quota_total_json_path: str = ""
+    balance_json_path: str = ""
+    cost_json_path: str = ""
     manager_user_id: int | None = None
     team: str = ""
     models: str = ""
@@ -580,6 +676,7 @@ class ApiKeyIn(BaseModel):
     api_key: str
     is_active: int = 1
     exhausted: int = 0
+    manager_user_id: int | None = None
 
 
 @app.get("/admin/accounts")
@@ -600,19 +697,44 @@ def list_accounts(x_token: str = Header(default="")):
     return [dict(r) for r in rows]
 
 
+@app.get("/admin/accounts/options")
+def list_account_options(x_token: str = Header(default="")):
+    """新增 key 等场景下拉用：返回全部 active accounts（不受 visibility_filter）。"""
+    get_current_user(x_token)
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT a.id, a.provider, a.base_url, a.manager_user_id,
+                   u.username AS manager_username
+            FROM accounts a
+            LEFT JOIN users u ON u.id = a.manager_user_id
+            WHERE a.is_active = 1
+            ORDER BY a.provider, a.id
+        """).fetchall()
+    return [dict(r) for r in rows]
+
+
 @app.post("/admin/accounts")
 def create_account(body: AccountIn, x_token: str = Header(default="")):
     user = get_current_user(x_token)
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
+        dup = conn.execute(
+            "SELECT 1 FROM accounts WHERE provider=? AND base_url=? LIMIT 1",
+            (body.provider, body.base_url),
+        ).fetchone()
+        if dup:
+            raise HTTPException(409, "已有相同供应商（provider + base_url 完全相同）")
         cur = conn.execute("""
             INSERT INTO accounts
               (provider, base_url, provider_backend_url, quota_total_path,
-               balance_path, cost_path, manager_user_id, team, created_by,
+               balance_path, cost_path,
+               quota_total_json_path, balance_json_path, cost_json_path,
+               manager_user_id, team, created_by,
                models, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (body.provider, body.base_url, body.provider_backend_url,
               body.quota_total_path, body.balance_path, body.cost_path,
+              body.quota_total_json_path, body.balance_json_path, body.cost_json_path,
               body.manager_user_id, body.team, user["id"], body.models,
               body.is_active, now, now))
         conn.commit()
@@ -676,14 +798,11 @@ def delete_account(account_id: int, x_token: str = Header(default="")):
 
 @app.get("/admin/accounts/{account_id}/sub-accounts")
 def list_sub_accounts_new(account_id: int, x_token: str = Header(default="")):
-    user = get_current_user(x_token)
+    get_current_user(x_token)
     with get_db() as conn:
         acc = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
         if not acc:
             raise HTTPException(404, "不存在")
-        if user["role"] != "admin":
-            if acc["created_by"] != user["id"] and acc["manager_user_id"] != user["id"]:
-                raise HTTPException(403, "无权访问")
         rows = conn.execute(
             "SELECT * FROM sub_accounts WHERE account_id=? ORDER BY id DESC",
             (account_id,),
@@ -764,14 +883,27 @@ def delete_sub_account_new(sub_id: int, x_token: str = Header(default="")):
 def list_api_keys(sub_id: int, x_token: str = Header(default="")):
     user = get_current_user(x_token)
     with get_db() as conn:
-        sub = _get_sub_account_or_404(conn, sub_id)
-        if user["role"] != "admin":
-            if sub["account_created_by"] != user["id"] and sub["account_manager"] != user["id"]:
-                raise HTTPException(403, "无权访问")
-        rows = conn.execute(
-            "SELECT * FROM api_keys WHERE sub_account_id=? ORDER BY id DESC",
-            (sub_id,),
-        ).fetchall()
+        _get_sub_account_or_404(conn, sub_id)
+        if user["role"] == "admin":
+            key_filter = ""
+            params = (sub_id,)
+        else:
+            key_filter = "AND (k.created_by = ? OR k.manager_user_id = ?)"
+            params = (sub_id, user["id"], user["id"])
+        rows = conn.execute(f"""
+            SELECT k.*, u.username AS manager_username,
+                   uc.username AS creator_username,
+                   (SELECT COUNT(*) FROM usage_stats WHERE config_id = k.id) AS usage_count,
+                   (SELECT GROUP_CONCAT(DISTINCT au.username)
+                      FROM api_requests ar
+                      JOIN users au ON au.id = ar.user_id
+                      WHERE ar.api_key_id = k.id AND ar.status = 'approved') AS users_username
+            FROM api_keys k
+            LEFT JOIN users u  ON u.id  = k.manager_user_id
+            LEFT JOIN users uc ON uc.id = k.created_by
+            WHERE k.sub_account_id=? {key_filter}
+            ORDER BY k.id DESC
+        """, params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -781,8 +913,6 @@ def create_api_key(sub_id: int, body: ApiKeyIn,
     user = get_current_user(x_token)
     with get_db() as conn:
         sub = _get_sub_account_or_404(conn, sub_id)
-        if user["role"] != "admin" and sub["account_created_by"] != user["id"]:
-            raise HTTPException(403, "无权操作")
         provider = sub["account_provider"]
         dup = conn.execute("""
             SELECT 1 FROM api_keys k
@@ -796,18 +926,25 @@ def create_api_key(sub_id: int, body: ApiKeyIn,
         now = datetime.now(timezone.utc).isoformat()
         cur = conn.execute(
             "INSERT INTO api_keys (sub_account_id, name, api_key, is_active, "
-            "exhausted, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "exhausted, manager_user_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (sub_id, body.name, body.api_key, body.is_active,
-             body.exhausted, now),
+             body.exhausted, body.manager_user_id, user["id"], now),
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM api_keys WHERE id=?", (cur.lastrowid,)).fetchone()
+        row = conn.execute("""
+            SELECT k.*, u.username AS manager_username,
+                   uc.username AS creator_username
+            FROM api_keys k
+            LEFT JOIN users u  ON u.id  = k.manager_user_id
+            LEFT JOIN users uc ON uc.id = k.created_by
+            WHERE k.id=?
+        """, (cur.lastrowid,)).fetchone()
     return dict(row)
 
 
 def _get_api_key_or_404(conn, key_id: int):
     row = conn.execute("""
-        SELECT k.*, a.created_by AS account_created_by
+        SELECT k.*
         FROM api_keys k
         JOIN sub_accounts s ON s.id = k.sub_account_id
         JOIN accounts a     ON a.id = s.account_id
@@ -824,14 +961,21 @@ def update_api_key(key_id: int, body: ApiKeyIn,
     user = get_current_user(x_token)
     with get_db() as conn:
         key = _get_api_key_or_404(conn, key_id)
-        if user["role"] != "admin" and key["account_created_by"] != user["id"]:
+        if user["role"] != "admin" and key["created_by"] != user["id"]:
             raise HTTPException(403, "无权操作")
         conn.execute(
-            "UPDATE api_keys SET name=?, api_key=?, is_active=?, exhausted=? WHERE id=?",
-            (body.name, body.api_key, body.is_active, body.exhausted, key_id),
+            "UPDATE api_keys SET name=?, api_key=?, is_active=?, exhausted=?, manager_user_id=? WHERE id=?",
+            (body.name, body.api_key, body.is_active, body.exhausted, body.manager_user_id, key_id),
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM api_keys WHERE id=?", (key_id,)).fetchone()
+        row = conn.execute("""
+            SELECT k.*, u.username AS manager_username,
+                   uc.username AS creator_username
+            FROM api_keys k
+            LEFT JOIN users u  ON u.id  = k.manager_user_id
+            LEFT JOIN users uc ON uc.id = k.created_by
+            WHERE k.id=?
+        """, (key_id,)).fetchone()
     return dict(row)
 
 
@@ -840,7 +984,7 @@ def delete_api_key(key_id: int, x_token: str = Header(default="")):
     user = get_current_user(x_token)
     with get_db() as conn:
         key = _get_api_key_or_404(conn, key_id)
-        if user["role"] != "admin" and key["account_created_by"] != user["id"]:
+        if user["role"] != "admin" and key["created_by"] != user["id"]:
             raise HTTPException(403, "无权操作")
         used = conn.execute(
             "SELECT 1 FROM usage_stats WHERE config_id=? LIMIT 1", (key_id,)
@@ -878,6 +1022,200 @@ def list_teams(x_token: str = Header(default="")):
             where_params,
         ).fetchall()
     return [r["team"] for r in rows]
+
+
+# ── Spec 2: quota-all + Excel import ────────────────────
+
+import httpx as _httpx
+from providers import extract_json_value
+
+
+async def _fetch_one_key(r: dict) -> tuple:
+    base = (r["provider_backend_url"] or r["base_url"] or "").rstrip("/")
+    headers = {"Authorization": f"Bearer {r['api_key']}"}
+
+    async def _get(path):
+        if not path:
+            return None
+        async with _httpx.AsyncClient(timeout=10) as cli:
+            resp = await cli.get(base + path, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+
+    raw = await asyncio.gather(
+        _get(r["quota_total_path"]),
+        _get(r["balance_path"]),
+        _get(r["cost_path"]),
+        return_exceptions=True,
+    )
+
+    def _coerce(val, json_path):
+        """有 json_path 走 extract_json_value;没有则尝试把原始响应直接当数字。"""
+        if isinstance(val, Exception) or val is None:
+            return None
+        if json_path:
+            return extract_json_value(val, json_path)
+        # 裸响应直接转 float（适合返回 42.5 / "42.5" 的简单计费接口）
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, str):
+            try: return float(val.strip())
+            except ValueError: return None
+        return None
+
+    total   = _coerce(raw[0], r["quota_total_json_path"])
+    balance = _coerce(raw[1], r["balance_json_path"])
+    used    = _coerce(raw[2], r["cost_json_path"])
+    return total, balance, used
+
+
+@app.get("/admin/accounts/quota-all")
+async def quota_all(x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    where_sql, where_params = visibility_filter(user)
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT k.*, a.provider, a.base_url, a.provider_backend_url,
+                   a.quota_total_path, a.balance_path, a.cost_path,
+                   a.quota_total_json_path, a.balance_json_path, a.cost_json_path
+            FROM api_keys k
+            JOIN sub_accounts s ON s.id = k.sub_account_id
+            JOIN accounts a     ON a.id = s.account_id
+            WHERE {where_sql}
+        """, where_params).fetchall()
+        rows = [dict(r) for r in rows]
+
+    results = {}
+    pending = []
+    for r in rows:
+        if r["exhausted"]:
+            results[str(r["id"])] = {
+                "total": r.get("last_total"),
+                "balance": 0,
+                "used": r.get("last_used"),
+                "exhausted": True,
+                "from_cache": True,
+                "cached_at": r.get("last_quota_at"),
+            }
+        else:
+            pending.append(r)
+
+    tasks = [asyncio.create_task(_fetch_one_key(r)) for r in pending]
+    fetched = await asyncio.gather(*tasks, return_exceptions=True)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for r, result in zip(pending, fetched):
+        kid = str(r["id"])
+        if isinstance(result, Exception):
+            results[kid] = {"error": str(result)}
+            continue
+        total, balance, used = result
+        partial = (total is None) or (balance is None) or (used is None)
+
+        new_zero_count = r.get("zero_count") or 0
+        new_last_zero_at = r.get("last_zero_at")
+        new_exhausted = 0
+
+        if balance is not None and balance == 0:
+            now_dt = datetime.now(timezone.utc)
+            should_count = True
+            if new_last_zero_at:
+                try:
+                    last = datetime.fromisoformat(new_last_zero_at)
+                    if (now_dt - last).total_seconds() < 12 * 3600:
+                        should_count = False
+                except Exception:
+                    pass
+            if should_count:
+                new_zero_count += 1
+                new_last_zero_at = now_iso
+            if new_zero_count >= 3:
+                new_exhausted = 1
+        elif balance is not None and balance > 0:
+            new_zero_count = 0
+            new_last_zero_at = None
+
+        results[kid] = {
+            "total": total, "balance": balance, "used": used,
+            "exhausted": bool(new_exhausted), "from_cache": False,
+            "partial": partial,
+        }
+        with get_db() as conn:
+            conn.execute("""
+                UPDATE api_keys
+                SET last_total=?, last_balance=?, last_used=?, last_quota_at=?,
+                    zero_count=?, last_zero_at=?, exhausted=?
+                WHERE id=?
+            """, (total, balance, used, now_iso,
+                  new_zero_count, new_last_zero_at, new_exhausted, r["id"]))
+            conn.commit()
+
+    return {"fetched_at": now_iso, "results": results}
+
+
+@app.post("/admin/sub-accounts/{sub_id}/api-keys/import-excel")
+def import_keys_xlsx(sub_id: int, file: UploadFile = File(...),
+                     manager_user_id: int | None = Form(default=None),
+                     x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        _get_sub_account_or_404(conn, sub_id)
+
+    if not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 格式")
+
+    from openpyxl import load_workbook
+    from io import BytesIO
+    content = file.file.read()
+    wb = load_workbook(BytesIO(content), read_only=True)
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    if not all_rows:
+        raise HTTPException(400, "Excel 为空")
+
+    header = [str(c or "").strip().lower() for c in all_rows[0]]
+    name_col = next((i for i, h in enumerate(header) if "名称" in h or "name" in h), -1)
+    key_col = next((i for i, h in enumerate(header) if "key" in h), -1)
+    if name_col < 0 or key_col < 0:
+        raise HTTPException(400, "未找到 API名称 / API key 列")
+
+    imported, skipped, errors = 0, [], []
+    for idx, row in enumerate(all_rows[1:], start=2):
+        name = str(row[name_col] or "").strip() if name_col < len(row) else ""
+        key = str(row[key_col] or "").strip() if key_col < len(row) else ""
+        if not name or not key:
+            continue  # 空行静默跳过，不计入失败
+        try:
+            create_api_key(sub_id, ApiKeyIn(name=name, api_key=key, manager_user_id=manager_user_id), x_token)
+            imported += 1
+        except HTTPException as e:
+            if e.status_code == 409:
+                skipped.append({"row": idx, "name": name})
+            else:
+                errors.append({"row": idx, "reason": str(e.detail)})
+
+    return {"imported": imported, "skipped_duplicates": skipped,
+            "errors": errors, "total_rows": len(all_rows) - 1}
+
+
+@app.get("/admin/api-keys/template.xlsx")
+def download_template(x_token: str = Header(default="")):
+    get_current_user(x_token)
+    from openpyxl import Workbook
+    from io import BytesIO
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "API keys"
+    ws.append(["API名称", "API key"])
+    ws.append(["示例-主key", "sk-xxxxxxxxxxxxxxxx"])
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="api_keys_template.xlsx"'},
+    )
 
 
 # ── Admin: configs ────────────────────────────────────────
@@ -988,6 +1326,299 @@ def daily_stats(config_id: int, days: int = 7, x_admin_password: str = Header(de
         """, (config_id, f"-{n}")).fetchall()
     return [{"day": r["day"], "count": r["cnt"]} for r in rows]
 
+
+# ── Platform 看板（admin） ──────────────────────────────
+
+@app.get("/admin/stats/platform/overview")
+def platform_overview(days: int = 1, x_admin_password: str = Header(default="")):
+    """核心指标。days=1 今日,days=N 近 N 天,days=0 总量(全平台累计)。"""
+    require_admin(x_admin_password)
+    n = max(0, min(int(days), 36500))
+    if n == 0:
+        date_filter = "1=1"
+    elif n == 1:
+        date_filter = "date(called_at) = date('now','localtime')"
+    else:
+        date_filter = f"called_at >= date('now','-{n-1} days')"
+    # 上面是给 usage_stats 用的;给 join 后表用,前缀 u.
+    u_filter = date_filter.replace("called_at", "u.called_at")
+
+    with get_db() as conn:
+        row = conn.execute(f"""
+            SELECT COUNT(*) AS total,
+                   SUM(success) AS ok,
+                   COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
+                   COALESCE(SUM(cost), 0) AS cost,
+                   COALESCE(AVG(duration_ms), 0) AS avg_ms,
+                   COUNT(DISTINCT user_id) AS active_users
+            FROM usage_stats
+            WHERE {date_filter}
+        """).fetchone()
+        # 活跃项目:期间内有调用的不同 project_name 列表
+        proj_rows = conn.execute(f"""
+            SELECT DISTINCT COALESCE(r.project_name,'未知项目') AS project
+            FROM usage_stats u
+            JOIN api_requests r ON r.user_id = u.user_id AND r.api_key_id = u.config_id
+            WHERE {u_filter} AND r.status = 'approved'
+            ORDER BY project
+        """).fetchall()
+    total = row["total"] or 0
+    ok    = row["ok"] or 0
+    projects = [r["project"] for r in proj_rows]
+    return {
+        "total_calls":  total,
+        "total_tokens": row["tokens"] or 0,
+        "total_cost":   round(row["cost"] or 0, 4),
+        "active_projects": projects,        # 项目名称数组
+        "active_projects_count": len(projects),
+        "active_users": row["active_users"] or 0,
+        "success_rate": round(ok / total * 100, 1) if total else 0,
+        "avg_duration_ms": int(row["avg_ms"] or 0),
+        "days": n,
+    }
+
+
+@app.get("/admin/stats/platform/trends")
+def platform_trends(days: int = 7, top: int = 5, x_admin_password: str = Header(default="")):
+    """请求/成本/Top N 模型每日趋势;days=0 总量;top 默认 5(展开时传 10)。"""
+    require_admin(x_admin_password)
+    n = max(0, min(int(days), 36500))
+    top_n = max(1, min(int(top), 20))
+    if n == 0: date_filter = "1=1"
+    elif n == 1: date_filter = "date(called_at) = date('now','localtime')"
+    else: date_filter = f"called_at >= date('now','-{n-1} days')"
+    with get_db() as conn:
+        daily = conn.execute(f"""
+            SELECT date(called_at) AS day,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(cost), 0) AS cost
+            FROM usage_stats
+            WHERE {date_filter}
+            GROUP BY day ORDER BY day
+        """).fetchall()
+        top_models = [r["model"] for r in conn.execute(f"""
+            SELECT COALESCE(model,'—') AS model, COUNT(*) AS c
+            FROM usage_stats
+            WHERE {date_filter}
+            GROUP BY model ORDER BY c DESC LIMIT {top_n}
+        """).fetchall()]
+        model_daily = []
+        if top_models:
+            ph = ",".join("?" * len(top_models))
+            model_daily = [dict(r) for r in conn.execute(f"""
+                SELECT date(called_at) AS day, COALESCE(model,'—') AS model, COUNT(*) AS calls
+                FROM usage_stats
+                WHERE {date_filter}
+                  AND COALESCE(model,'—') IN ({ph})
+                GROUP BY day, model ORDER BY day
+            """, top_models).fetchall()]
+    return {
+        "days":         n,
+        "daily":        [dict(r) for r in daily],
+        "top_models":   top_models,
+        "model_daily":  model_daily,
+    }
+
+
+@app.get("/admin/stats/platform/ranking")
+def platform_ranking(days: int = 7, limit: int = 10, x_admin_password: str = Header(default="")):
+    """项目 + 用户 调用排行;默认 Top10,limit 可放大(上限 1000)用于展开查看全部;days=0 为总量。"""
+    require_admin(x_admin_password)
+    n = max(0, min(int(days), 36500))
+    lim = max(1, min(int(limit), 1000))
+    if n == 0: u_filter = "1=1"
+    elif n == 1: u_filter = "date(u.called_at) = date('now','localtime')"
+    else: u_filter = f"u.called_at >= date('now','-{n-1} days')"
+    with get_db() as conn:
+        projects = [dict(r) for r in conn.execute(f"""
+            SELECT COALESCE(r.project_name,'未知项目') AS project,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(u.input_tokens + u.output_tokens),0) AS tokens,
+                   COALESCE(SUM(u.cost),0) AS cost
+            FROM usage_stats u
+            LEFT JOIN api_requests r ON r.user_id = u.user_id AND r.api_key_id = u.config_id
+            WHERE {u_filter}
+            GROUP BY project
+            ORDER BY calls DESC LIMIT {lim}
+        """).fetchall()]
+        users = [dict(r) for r in conn.execute(f"""
+            SELECT COALESCE(usr.username,'未知') AS username,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(u.input_tokens + u.output_tokens),0) AS tokens,
+                   COALESCE(SUM(u.cost),0) AS cost
+            FROM usage_stats u
+            LEFT JOIN users usr ON usr.id = u.user_id
+            WHERE {u_filter}
+            GROUP BY u.user_id
+            ORDER BY calls DESC LIMIT {lim}
+        """).fetchall()]
+    for r in projects + users:
+        r["cost"] = round(r["cost"], 4)
+    return {"projects": projects, "users": users, "days": n}
+
+
+@app.get("/admin/stats/platform/models")
+def platform_models(days: int = 7, x_admin_password: str = Header(default="")):
+    """模型治理：成本/成功率/延迟 + 热门 Top5;days=0 总量。"""
+    require_admin(x_admin_password)
+    n = max(0, min(int(days), 36500))
+    if n == 0: date_filter = "1=1"
+    elif n == 1: date_filter = "date(called_at) = date('now','localtime')"
+    else: date_filter = f"called_at >= date('now','-{n-1} days')"
+    with get_db() as conn:
+        rows = [dict(r) for r in conn.execute(f"""
+            SELECT COALESCE(model,'—') AS model,
+                   COUNT(*) AS calls,
+                   SUM(success) AS ok,
+                   COALESCE(SUM(cost),0) AS cost,
+                   COALESCE(AVG(duration_ms),0) AS avg_ms,
+                   COALESCE(SUM(input_tokens+output_tokens),0) AS tokens
+            FROM usage_stats
+            WHERE {date_filter}
+            GROUP BY model
+            ORDER BY calls DESC
+        """).fetchall()]
+    for r in rows:
+        c = r["calls"] or 0
+        r["success_rate"] = round((r["ok"] or 0) / c * 100, 1) if c else 0
+        r["avg_ms"] = int(r["avg_ms"] or 0)
+        r["cost"]   = round(r["cost"], 4)
+        r.pop("ok", None)
+    return {"models": rows, "days": n}
+
+
+@app.get("/admin/stats/platform/anomalies")
+def platform_anomalies(x_admin_password: str = Header(default="")):
+    """失败率 / 超时（>10s） / 今日 vs 昨日同比 +50% 标记。"""
+    require_admin(x_admin_password)
+    with get_db() as conn:
+        today = conn.execute("""
+            SELECT COUNT(*) AS total, SUM(success) AS ok,
+                   SUM(CASE WHEN duration_ms > 10000 THEN 1 ELSE 0 END) AS slow,
+                   SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS fails
+            FROM usage_stats
+            WHERE date(called_at) = date('now','localtime')
+        """).fetchone()
+        yest = conn.execute("""
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS fails
+            FROM usage_stats
+            WHERE date(called_at) = date('now','localtime','-1 day')
+        """).fetchone()
+        # 今日按小时
+        hourly = [dict(r) for r in conn.execute("""
+            SELECT strftime('%H', called_at) AS hour,
+                   COUNT(*) AS calls,
+                   SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) AS fails
+            FROM usage_stats
+            WHERE date(called_at) = date('now','localtime')
+            GROUP BY hour ORDER BY hour
+        """).fetchall()]
+        # 最近 10 条失败
+        recent_fails = [dict(r) for r in conn.execute("""
+            SELECT u.called_at, u.model, u.duration_ms, u.error_msg,
+                   COALESCE(usr.username,'—') AS username
+            FROM usage_stats u
+            LEFT JOIN users usr ON usr.id = u.user_id
+            WHERE u.success = 0
+            ORDER BY u.id DESC LIMIT 10
+        """).fetchall()]
+    t_total = today["total"] or 0
+    y_total = yest["total"] or 0
+    t_fails = today["fails"] or 0
+    growth_pct = round((t_total - y_total) / y_total * 100, 1) if y_total else None
+    return {
+        "today_total":   t_total,
+        "today_fails":   t_fails,
+        "today_slow":    today["slow"] or 0,
+        "fail_rate":     round(t_fails / t_total * 100, 1) if t_total else 0,
+        "yesterday_total": y_total,
+        "growth_pct":    growth_pct,
+        "is_anomaly":    growth_pct is not None and growth_pct >= 50,
+        "hourly":        hourly,
+        "recent_fails":  recent_fails,
+    }
+
+
+# ── Me: 个人看板 stats ─────────────────────────────────────
+
+@app.get("/me/stats/today")
+def me_stats_today(x_token: str = Header(default="")):
+    """当前用户当日：总请求 / 总 Token / 总费用 / 成功率。"""
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        row = conn.execute("""
+            SELECT COUNT(*) AS total,
+                   SUM(success) AS ok,
+                   COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
+                   COALESCE(SUM(cost), 0) AS cost
+            FROM usage_stats
+            WHERE user_id = ?
+              AND date(called_at) = date('now', 'localtime')
+        """, (user["id"],)).fetchone()
+    total = row["total"] or 0
+    ok    = row["ok"] or 0
+    return {
+        "total_calls":  total,
+        "total_tokens": row["tokens"] or 0,
+        "total_cost":   round(row["cost"] or 0, 4),
+        "success_rate": round(ok / total * 100, 1) if total else 0,
+    }
+
+
+@app.get("/me/stats/by-model")
+def me_stats_by_model(days: int | None = None, x_token: str = Header(default="")):
+    """当前用户按模型分组：调用量、Token 数、费用、占比。"""
+    user = get_current_user(x_token)
+    date_clause = f"AND called_at >= date('now','-{int(days)} days')" if days else ""
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT COALESCE(model, '—') AS model,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(input_tokens), 0)  AS in_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS out_tokens,
+                   COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
+                   COALESCE(SUM(cost), 0) AS cost
+            FROM usage_stats
+            WHERE user_id = ? {date_clause}
+            GROUP BY model
+            ORDER BY calls DESC
+        """, (user["id"],)).fetchall()
+    rows = [dict(r) for r in rows]
+    total_calls = sum(r["calls"] for r in rows) or 0
+    for r in rows:
+        r["percent"]   = round(r["calls"] / total_calls * 100, 1) if total_calls else 0
+        r["cost"]      = round(r["cost"], 4)
+    return rows
+
+
+@app.get("/me/stats/keys-balance")
+def me_stats_keys_balance(x_token: str = Header(default="")):
+    """当前用户已批准的 API key 余额视图：总额、已花费、余额。"""
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT r.id          AS request_id,
+                   r.project_name,
+                   a.provider,
+                   sa.name        AS sub_account_name,
+                   k.id           AS api_key_id,
+                   k.name         AS api_name,
+                   k.last_total   AS total,
+                   k.last_balance AS balance,
+                   k.last_used    AS used,
+                   k.last_quota_at,
+                   k.exhausted
+            FROM api_requests r
+            JOIN api_keys k     ON k.id = r.api_key_id
+            JOIN sub_accounts sa ON sa.id = k.sub_account_id
+            JOIN accounts a     ON a.id = sa.account_id
+            WHERE r.user_id = ? AND r.status = 'approved'
+            ORDER BY r.created_at DESC
+        """, (user["id"],)).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── Auth ──────────────────────────────────────────────────
 
 class RegisterIn(BaseModel):
@@ -1011,17 +1642,22 @@ def get_current_user(x_token: str = Header(default="")):
 
 
 def visibility_filter(user: dict) -> tuple[str, tuple]:
-    """返回追加到 WHERE 的 (子句, params)。admin role 时不限制。"""
+    """密钥管理列表的可见性：admin 看全部；其他人看自己创建的、或自己管理其中 key 的 account。"""
     if user["role"] == "admin":
         return "1=1", ()
-    return "(a.created_by=? OR a.manager_user_id=?)", (user["id"], user["id"])
+    return ("(a.created_by = ? OR a.manager_user_id = ? OR a.id IN "
+            "(SELECT s.account_id FROM sub_accounts s JOIN api_keys k ON k.sub_account_id = s.id "
+            "WHERE k.manager_user_id = ?))",
+            (user["id"], user["id"], user["id"]))
 
 
 def require_owner_or_admin(user: dict, account: dict) -> None:
-    """写权限:创建人或 admin role。manager 不行。"""
+    """写权限：admin role、创建人或该帐号的管理员（manager_user_id）。"""
     if user["role"] == "admin":
         return
     if account["created_by"] == user["id"]:
+        return
+    if account.get("manager_user_id") == user["id"]:
         return
     raise HTTPException(status_code=403, detail="无权操作此帐号")
 
@@ -1073,22 +1709,58 @@ def me(x_token: str = Header(default="")):
 # ── API 申请 ───────────────────────────────────────────────
 
 class RequestIn(BaseModel):
-    config_id: int
+    account_id: int | None = None
     project_name: str
-    purpose: str
     lead: str
     budget: str
+    purpose: str = ""           # 需求详情
+    reviewer_id: int | None = None   # 审批人 user_id（必须为 account 的管理员）
+    dept: str = ""
+    # 向后兼容旧字段
+    config_id: int | None = None
     sub_accounts: str = ""
     cc_person: str = ""
+
+@app.get("/api-requests/cascade-options")
+def cascade_options():
+    """返回级联选项：(account × key级管理员) 笛卡尔对，前端先选管理员再过滤 account。
+    每个 (account, manager) 组合一行，去重。"""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT DISTINCT a.id, a.provider, a.team,
+                   u.username AS manager_username, u.id AS manager_user_id
+            FROM accounts a
+            JOIN sub_accounts s ON s.account_id = a.id
+            JOIN api_keys k    ON k.sub_account_id = s.id
+            JOIN users u       ON u.id = k.manager_user_id
+            WHERE a.is_active = 1 AND k.is_active = 1
+            ORDER BY a.provider, u.username
+        """).fetchall()
+    return [dict(r) for r in rows]
 
 @app.post("/api-requests")
 def create_request(body: RequestIn, x_token: str = Header(default="")):
     user = get_current_user(x_token)
+    if not body.account_id:
+        raise HTTPException(400, "请选择供应商")
+    if not body.reviewer_id:
+        raise HTTPException(400, "请选择审批人")
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
+        # 校验 reviewer_id 是否为该 account 下任意 api_keys 的管理员（key 级）
+        owns = conn.execute("""
+            SELECT 1 FROM api_keys k
+            JOIN sub_accounts s ON s.id = k.sub_account_id
+            WHERE s.account_id = ? AND k.manager_user_id = ? AND k.is_active = 1
+            LIMIT 1
+        """, (body.account_id, body.reviewer_id)).fetchone()
+        if not owns:
+            raise HTTPException(400, "该成员名下没有此 API")
         cur = conn.execute(
-            "INSERT INTO api_requests (user_id,config_id,project_name,purpose,lead,budget,sub_accounts,cc_person,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (user["id"], body.config_id, body.project_name, body.purpose, body.lead, body.budget, body.sub_accounts, body.cc_person, now, now)
+            "INSERT INTO api_requests (user_id,config_id,account_id,project_name,purpose,lead,budget,dept,sub_accounts,cc_person,reviewer_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (user["id"], body.config_id, body.account_id, body.project_name,
+             body.purpose, body.lead, body.budget, body.dept,
+             body.sub_accounts, body.cc_person, body.reviewer_id, now, now)
         )
         conn.commit()
     return {"id": cur.lastrowid}
@@ -1098,13 +1770,35 @@ def my_requests(x_token: str = Header(default="")):
     user = get_current_user(x_token)
     with get_db() as conn:
         rows = conn.execute("""
-            SELECT r.*, c.name as config_name, c.provider, c.base_url, c.manager
+            SELECT r.*,
+                   a.provider, a.base_url,
+                   u.username AS manager_username,
+                   rv.username AS reviewer_username,
+                   ak.name AS api_key_name,
+                   (SELECT km.username FROM api_keys k
+                      JOIN sub_accounts s ON s.id = k.sub_account_id
+                      JOIN users km ON km.id = k.manager_user_id
+                      WHERE s.account_id = r.account_id AND k.is_active = 1
+                      ORDER BY k.id LIMIT 1) AS key_manager_username,
+                   c.name as config_name, c.provider as config_provider, c.manager as config_manager
             FROM api_requests r
-            JOIN api_configs c ON c.id = r.config_id
+            LEFT JOIN accounts a ON a.id = r.account_id
+            LEFT JOIN users u ON u.id = a.manager_user_id
+            LEFT JOIN users rv ON rv.id = r.reviewer_id
+            LEFT JOIN api_configs c ON c.id = r.config_id
+            LEFT JOIN api_keys ak ON ak.id = r.api_key_id
             WHERE r.user_id=?
             ORDER BY r.created_at DESC
         """, (user["id"],)).fetchall()
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["provider"] = d["provider"] or d.get("config_provider") or ""
+        d["manager"] = d["reviewer_username"] or d.get("key_manager_username") or ""
+
+        d["config_name"] = d["config_name"] or ""
+        result.append(d)
+    return result
 
 
 # ── Admin: 申请审核 ────────────────────────────────────────
@@ -1112,28 +1806,79 @@ def my_requests(x_token: str = Header(default="")):
 class ReviewIn(BaseModel):
     status: Literal["approved", "rejected"]
     review_note: str = ""
+    api_key_id: int | None = None
 
 @app.get("/admin/api-requests")
-def admin_list_requests(x_admin_password: str = Header(default="")):
-    require_admin(x_admin_password)
+def admin_list_requests(x_token: str = Header(default="")):
+    user = get_current_user(x_token)
     with get_db() as conn:
-        rows = conn.execute("""
-            SELECT r.*, u.username, c.name as config_name, c.provider, c.manager
-            FROM api_requests r
-            JOIN users u ON u.id = r.user_id
-            JOIN api_configs c ON c.id = r.config_id
-            ORDER BY r.created_at DESC
-        """).fetchall()
-    return [dict(r) for r in rows]
+        if user["role"] == "admin":
+            rows = conn.execute("""
+                SELECT r.*, u.username,
+                       a.provider, a.base_url,
+                       mgr.username AS manager_username,
+                       rv.username AS reviewer_username,
+                       ak.name AS api_key_name,
+                       (SELECT km.username FROM api_keys k
+                          JOIN sub_accounts s ON s.id = k.sub_account_id
+                          JOIN users km ON km.id = k.manager_user_id
+                          WHERE s.account_id = r.account_id AND k.is_active = 1
+                          ORDER BY k.id LIMIT 1) AS key_manager_username,
+                       c.name as config_name, c.provider as config_provider, c.manager as config_manager
+                FROM api_requests r
+                JOIN users u ON u.id = r.user_id
+                LEFT JOIN accounts a ON a.id = r.account_id
+                LEFT JOIN users mgr ON mgr.id = a.manager_user_id
+                LEFT JOIN users rv ON rv.id = r.reviewer_id
+                LEFT JOIN api_configs c ON c.id = r.config_id
+                LEFT JOIN api_keys ak ON ak.id = r.api_key_id
+                ORDER BY r.created_at DESC
+            """).fetchall()
+        else:
+            # 非 admin：只看分配给自己审核的申请（reviewer_id = self），
+            # 或自己是该 account 下任意 key 的管理员（兼容旧数据 reviewer_id 为空）
+            rows = conn.execute("""
+                SELECT r.*, u.username,
+                       a.provider, a.base_url,
+                       mgr.username AS manager_username,
+                       rv.username AS reviewer_username,
+                       ak.name AS api_key_name,
+                       (SELECT km.username FROM api_keys k
+                          JOIN sub_accounts s ON s.id = k.sub_account_id
+                          JOIN users km ON km.id = k.manager_user_id
+                          WHERE s.account_id = r.account_id AND k.is_active = 1
+                          ORDER BY k.id LIMIT 1) AS key_manager_username,
+                       c.name as config_name, c.provider as config_provider, c.manager as config_manager
+                FROM api_requests r
+                JOIN users u ON u.id = r.user_id
+                LEFT JOIN accounts a ON a.id = r.account_id
+                LEFT JOIN users mgr ON mgr.id = a.manager_user_id
+                LEFT JOIN users rv ON rv.id = r.reviewer_id
+                LEFT JOIN api_configs c ON c.id = r.config_id
+                LEFT JOIN api_keys ak ON ak.id = r.api_key_id
+                WHERE r.reviewer_id = ?
+                ORDER BY r.created_at DESC
+            """, (user["id"],)).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["provider"] = d["provider"] or d.get("config_provider") or ""
+        d["manager"] = d.get("reviewer_username") or d.get("key_manager_username") or ""
+
+        d["config_name"] = d["config_name"] or ""
+        result.append(d)
+    return result
 
 
 # ── Admin: 用户管理 ───────────────────────────────────────
 
 @app.get("/admin/users")
-def list_users(x_admin_password: str = Header(default="")):
-    require_admin(x_admin_password)
+def list_users(x_token: str = Header(default="")):
+    get_current_user(x_token)  # 登录即可
     with get_db() as conn:
-        rows = conn.execute("SELECT id, username, role, created_at FROM users ORDER BY id").fetchall()
+        rows = conn.execute(
+            "SELECT id, username, role, created_at FROM users ORDER BY id"
+        ).fetchall()
     return [dict(r) for r in rows]
 
 class UserRoleIn(BaseModel):
@@ -1191,6 +1936,7 @@ class MessageIn(BaseModel):
     session_id: int
     role: Literal["user", "assistant"]
     content: str
+    model: str = ""
 
 @app.post("/sessions")
 def create_session(body: SessionIn, x_token: str = Header(default="")):
@@ -1257,8 +2003,8 @@ def save_message(body: MessageIn, x_token: str = Header(default="")):
     content = body.content if isinstance(body.content, str) else _json.dumps(body.content, ensure_ascii=False)
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO chat_messages (session_id, role, content, created_at) VALUES (?,?,?,?)",
-            (body.session_id, body.role, content, now)
+            "INSERT INTO chat_messages (session_id, role, content, model, created_at) VALUES (?,?,?,?,?)",
+            (body.session_id, body.role, content, body.model, now)
         )
         conn.commit()
     return {"ok": True}
@@ -1324,16 +2070,90 @@ def admin_history(user_id: int | None = None, x_admin_password: str = Header(def
 # 已移除,改用 /admin/accounts/{id}/sub-accounts + /admin/sub-accounts/{id}
 
 
+@app.get("/admin/api-requests/{req_id}/candidate-keys")
+def candidate_keys(req_id: int, x_token: str = Header(default="")):
+    """列出该申请对应 account 下所有 sub_account 的未占用 key（含余额）。"""
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        req = conn.execute("SELECT * FROM api_requests WHERE id=?", (req_id,)).fetchone()
+        if not req:
+            raise HTTPException(404, "申请不存在")
+        if user["role"] != "admin" and req["reviewer_id"] != user["id"]:
+            is_key_manager = conn.execute("""
+                SELECT 1 FROM api_keys k
+                JOIN sub_accounts s ON s.id = k.sub_account_id
+                WHERE s.account_id = ? AND k.manager_user_id = ? AND k.is_active = 1
+                LIMIT 1
+            """, (req["account_id"], user["id"])).fetchone()
+            if not is_key_manager:
+                raise HTTPException(403, "无权操作")
+        account_id = req["account_id"]
+        if not account_id:
+            # 回退：用 reviewer_id 反查其管理的 api_keys（key 级管理员），
+            # 兼容老申请（无 account_id）和新流程（管理员归 key 不归 account）
+            reviewer_id = req["reviewer_id"]
+            if not reviewer_id:
+                return []
+            rows = conn.execute("""
+                SELECT sa.id AS sub_account_id, sa.name AS sub_account_name,
+                       k.id AS api_key_id, k.name AS api_key_name,
+                       k.last_total, k.last_balance
+                FROM api_keys k
+                JOIN sub_accounts sa ON sa.id = k.sub_account_id
+                WHERE k.manager_user_id = ?
+                  AND k.is_active = 1
+                  AND NOT EXISTS (
+                    SELECT 1 FROM api_requests r2
+                    WHERE r2.api_key_id = k.id AND r2.status = 'approved'
+                  )
+                ORDER BY sa.name, k.name
+            """, (reviewer_id,)).fetchall()
+            return [dict(r) for r in rows]
+        rows = conn.execute("""
+            SELECT sa.id AS sub_account_id, sa.name AS sub_account_name,
+                   k.id AS api_key_id, k.name AS api_key_name,
+                   k.last_total, k.last_balance
+            FROM sub_accounts sa
+            JOIN api_keys k ON k.sub_account_id = sa.id
+            WHERE sa.account_id = ?
+              AND k.is_active = 1
+              AND NOT EXISTS (
+                SELECT 1 FROM api_requests r2
+                WHERE r2.api_key_id = k.id AND r2.status = 'approved'
+              )
+            ORDER BY sa.name, k.name
+        """, (account_id,)).fetchall()
+    return [dict(r) for r in rows]
+
 @app.put("/admin/api-requests/{req_id}")
-def admin_review_request(req_id: int, body: ReviewIn, sub_account_id: int | None = None, x_admin_password: str = Header(default="")):
-    """审核申请，可同时分配子账号。"""
-    require_admin(x_admin_password)
+def admin_review_request(req_id: int, body: ReviewIn, x_token: str = Header(default="")):
+    """审核申请；通过时必须传 api_key_id，执行 1:1 占用约束。"""
+    user = get_current_user(x_token)
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
-        if sub_account_id is not None:
+        req = conn.execute("SELECT * FROM api_requests WHERE id=?", (req_id,)).fetchone()
+        if not req:
+            raise HTTPException(404, "申请不存在")
+        if user["role"] != "admin" and req["reviewer_id"] != user["id"]:
+            is_key_manager = conn.execute("""
+                SELECT 1 FROM api_keys k
+                JOIN sub_accounts s ON s.id = k.sub_account_id
+                WHERE s.account_id = ? AND k.manager_user_id = ? AND k.is_active = 1
+                LIMIT 1
+            """, (req["account_id"], user["id"])).fetchone()
+            if not is_key_manager:
+                raise HTTPException(403, "无权操作")
+        if body.status == "approved" and body.api_key_id:
+            # 1:1 约束：同一 key 不能同时 approved 给两个申请
+            conflict = conn.execute(
+                "SELECT COUNT(*) FROM api_requests WHERE api_key_id=? AND status='approved' AND id!=?",
+                (body.api_key_id, req_id)
+            ).fetchone()[0]
+            if conflict > 0:
+                raise HTTPException(409, "该密钥已被其他申请占用")
             conn.execute(
-                "UPDATE api_requests SET status=?,review_note=?,sub_account_id=?,updated_at=? WHERE id=?",
-                (body.status, body.review_note, sub_account_id, now, req_id)
+                "UPDATE api_requests SET status=?,review_note=?,api_key_id=?,updated_at=? WHERE id=?",
+                (body.status, body.review_note, body.api_key_id, now, req_id)
             )
         else:
             conn.execute(
@@ -1343,21 +2163,42 @@ def admin_review_request(req_id: int, body: ReviewIn, sub_account_id: int | None
         conn.commit()
     return {"ok": True}
 
+def get_credentials_by_request(request_id: int, user_id: int):
+    """反查 api_requests → api_keys → accounts，校验归属和状态，返回 (api_key, base_url, provider, api_key_id)。"""
+    with get_db() as conn:
+        row = conn.execute("""
+            SELECT r.status, r.user_id, k.id AS api_key_id, k.api_key, a.base_url, a.provider
+            FROM api_requests r
+            JOIN api_keys k ON k.id = r.api_key_id
+            JOIN sub_accounts sa ON sa.id = k.sub_account_id
+            JOIN accounts a ON a.id = sa.account_id
+            WHERE r.id = ?
+        """, (request_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "申请不存在或未分配密钥")
+    if row["user_id"] != user_id:
+        raise HTTPException(403, "无权使用此申请")
+    if row["status"] != "approved":
+        raise HTTPException(403, "申请未通过审核")
+    return row["api_key"], row["base_url"], row["provider"], row["api_key_id"]
+
 @app.get("/api-requests/approved")
-def approved_configs(x_token: str = Header(default="")):
-    """返回当前用户已审核通过的 API 配置列表，含子账号信息。"""
+def approved_requests(x_token: str = Header(default="")):
+    """返回当前用户已审核通过的申请列表，不暴露 api_key 明文。"""
     user = get_current_user(x_token)
     with get_db() as conn:
         rows = conn.execute("""
-            SELECT c.id, c.name, c.provider, c.base_url, c.created_at, c.updated_at,
-                   r.id as request_id, r.sub_account_id,
-                   sa.name as sub_account_name, sa.available_models as sub_models,
-                   sa.quota_type, sa.quota_amount, sa.ip_restriction
+            SELECT r.id AS request_id, r.project_name, r.created_at, r.status,
+                   a.provider, a.base_url,
+                   sa.name AS sub_account_name,
+                   k.name AS api_name,
+                   a.models AS available_models
             FROM api_requests r
-            JOIN api_configs c ON c.id = r.config_id
-            LEFT JOIN sub_accounts sa ON sa.id = r.sub_account_id
-            WHERE r.user_id=? AND r.status='approved' AND c.is_active=1
-            ORDER BY c.name
+            LEFT JOIN accounts a ON a.id = r.account_id
+            LEFT JOIN api_keys k ON k.id = r.api_key_id
+            LEFT JOIN sub_accounts sa ON sa.id = k.sub_account_id
+            WHERE r.user_id=? AND r.status='approved'
+            ORDER BY r.created_at DESC
         """, (user["id"],)).fetchall()
     return [dict(r) for r in rows]
 
@@ -1369,72 +2210,570 @@ class BatchJobIn(BaseModel):
     config_id: int | None = None
     label: str = ""
     row_count: int = 0
+    settings_json: str = ""
 
 class BatchJobRowIn(BaseModel):
     job_id: int
     row_index: int
     input_json: str
     output_text: str = ""
+    output_type: str = "text"
+    output_path: str = ""
+    label: str = ""
     success: int = 1
     error_msg: str = ""
+    started_at: str = ""
+    finished_at: str = ""
 
 @app.post("/batch2/jobs")
 def create_batch_job(body: BatchJobIn, x_token: str = Header(default="")):
     user = get_current_user(x_token)
-    now = datetime.now(timezone.utc).isoformat()
+    now_local = datetime.now()
+    now_iso   = datetime.now(timezone.utc).isoformat()
+    stamp     = now_local.strftime("%Y%m%d_%H%M%S")
+    # 同秒内递增序号
     with get_db() as conn:
+        existing = conn.execute(
+            "SELECT batch_id FROM batch_jobs WHERE batch_id LIKE ?",
+            (f"B_{stamp}_%",)
+        ).fetchall()
+        seq = 1
+        for r in existing:
+            try:
+                n = int((r["batch_id"] or "").rsplit("_", 1)[-1])
+                if n >= seq:
+                    seq = n + 1
+            except Exception:
+                pass
+        batch_id = f"B_{stamp}_{seq}"
+        task_name = body.task_name.strip() if body.task_name and body.task_name.strip() else "NA"
         cur = conn.execute(
-            "INSERT INTO batch_jobs (user_id,task_name,model,config_id,label,row_count,created_at) VALUES (?,?,?,?,?,?,?)",
-            (user["id"], body.task_name, body.model, body.config_id, body.label, body.row_count, now)
+            "INSERT INTO batch_jobs (user_id,task_name,model,config_id,label,row_count,settings_json,created_at,started_at,batch_id,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (user["id"], task_name, body.model, body.config_id, body.label, body.row_count,
+             body.settings_json, now_iso, now_iso, batch_id, "running")
         )
         conn.commit()
-    return {"job_id": cur.lastrowid}
+    return {"job_id": cur.lastrowid, "batch_id": batch_id, "task_name": task_name}
 
 @app.post("/batch2/rows")
 def save_batch_row(body: BatchJobRowIn, x_token: str = Header(default="")):
     get_current_user(x_token)
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO batch_job_rows (job_id,row_index,input_json,output_text,success,error_msg) VALUES (?,?,?,?,?,?)",
-            (body.job_id, body.row_index, body.input_json, body.output_text, body.success, body.error_msg)
+            "INSERT INTO batch_job_rows (job_id,row_index,input_json,output_text,output_type,output_path,label,success,error_msg,started_at,finished_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (body.job_id, body.row_index, body.input_json, body.output_text, body.output_type, body.output_path,
+             body.label, body.success, body.error_msg, body.started_at, body.finished_at)
         )
         if body.success:
             conn.execute("UPDATE batch_jobs SET done_count=done_count+1 WHERE id=?", (body.job_id,))
         else:
             conn.execute("UPDATE batch_jobs SET fail_count=fail_count+1 WHERE id=?", (body.job_id,))
+        # 让 row_count 至少等于已写入的最大 row_index+1，避免详情页"总数=0"
+        conn.execute(
+            "UPDATE batch_jobs SET row_count=MAX(row_count, ?) WHERE id=?",
+            (int(body.row_index) + 1, body.job_id)
+        )
         conn.commit()
     return {"ok": True}
 
 @app.put("/batch2/jobs/{job_id}/finish")
-def finish_batch_job(job_id: int, status: str = "completed", x_token: str = Header(default="")):
-    get_current_user(x_token)
+def finish_batch_job(job_id: int, status: str = "", x_token: str = Header(default="")):
+    """status 不传时由 done/fail 计数自动判定。"""
+    user = get_current_user(x_token)
+    now_iso = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
-        conn.execute("UPDATE batch_jobs SET status=? WHERE id=?", (status, job_id))
+        row = conn.execute("SELECT user_id,row_count,done_count,fail_count FROM batch_jobs WHERE id=?",
+                            (job_id,)).fetchone()
+        if not row or row["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="无权限")
+        if not status:
+            done = row["done_count"] or 0
+            fail = row["fail_count"] or 0
+            total = row["row_count"] or (done + fail)
+            if fail == 0 and done >= total:
+                status = "completed"
+            elif done == 0 and fail > 0:
+                status = "failed"
+            elif fail > 0:
+                status = "partial_failed"
+            else:
+                status = "completed"
+        conn.execute("UPDATE batch_jobs SET status=?, finished_at=? WHERE id=?",
+                     (status, now_iso, job_id))
         conn.commit()
+    return {"ok": True, "status": status}
+
+class TaskRenameIn(BaseModel):
+    task_name: str
+
+@app.put("/batch2/jobs/{job_id}/rename")
+def rename_batch_job(job_id: int, body: TaskRenameIn, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    new_name = (body.task_name or "").strip() or "NA"
+    with get_db() as conn:
+        row = conn.execute("SELECT user_id FROM batch_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row or row["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="无权限")
+        conn.execute("UPDATE batch_jobs SET task_name=? WHERE id=?", (new_name, job_id))
+        conn.commit()
+    return {"ok": True, "task_name": new_name}
+
+# ── 本地图片预览（白名单：仅当前用户某条批次行 input_json 出现过的路径）────
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+
+@app.get("/batch2/local-image")
+def serve_local_image(path: str, token: str = "", x_token: str = Header(default="")):
+    user = get_current_user(x_token or token)
+    path = (path or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="path 不能为空")
+    ext = pathlib.Path(path).suffix.lower()
+    if ext not in _IMAGE_EXTS:
+        raise HTTPException(status_code=400, detail="仅支持图片文件")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    # 白名单：路径必须在当前用户的某个 batch_job_rows.input_json 里出现过
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT br.input_json FROM batch_job_rows br
+            JOIN batch_jobs bj ON bj.id = br.job_id
+            WHERE bj.user_id=? AND br.input_json LIKE ?
+            LIMIT 1
+        """, (user["id"], f"%{path}%")).fetchone()
+    if not rows:
+        raise HTTPException(status_code=403, detail="该路径未出现在你的批次记录中")
+
+    mime_map = {".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png",
+                ".gif":"image/gif",".webp":"image/webp",".bmp":"image/bmp"}
+    from fastapi.responses import FileResponse
+    return FileResponse(path, media_type=mime_map.get(ext, "image/jpeg"))
+
+@app.get("/batch2/jobs/{job_id}/export")
+def export_batch_job(job_id: int, token: str = "", x_token: str = Header(default="")):
+    user = get_current_user(x_token or token)
+    with get_db() as conn:
+        job = conn.execute("SELECT * FROM batch_jobs WHERE id=?", (job_id,)).fetchone()
+        if not job or job["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="无权限")
+        rows = conn.execute(
+            "SELECT * FROM batch_job_rows WHERE job_id=? ORDER BY row_index", (job_id,)
+        ).fetchall()
+
+    settings = {}
+    try: settings = json.loads(job["settings_json"] or "{}")
+    except Exception: pass
+    fields = settings.get("selected_fields") or []
+
+    from openpyxl import Workbook
+    wb = Workbook(); ws = wb.active; ws.title = "结果"
+    headers = ["行号"] + (fields if fields else ["输入"]) + ["输出", "状态", "耗时(ms)", "错误"]
+    ws.append(headers)
+    for r in rows:
+        try: inp = json.loads(r["input_json"] or "{}")
+        except Exception: inp = {}
+        if fields:
+            in_cells = [str(inp.get(f, "")) for f in fields]
+        else:
+            in_cells = [json.dumps(inp, ensure_ascii=False)]
+        # 计算耗时（ms）
+        elapsed_ms = ""
+        try:
+            if r["started_at"] and r["finished_at"]:
+                s = datetime.fromisoformat(r["started_at"])
+                e = datetime.fromisoformat(r["finished_at"])
+                elapsed_ms = int((e - s).total_seconds() * 1000)
+        except Exception: pass
+        ws.append([r["row_index"]] + in_cells +
+                  [r["output_text"] or "", "完成" if r["success"] else "失败",
+                   elapsed_ms, r["error_msg"] or ""])
+
+    import io
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    safe_name = (job["batch_id"] or f"job_{job_id}").replace("/", "_")
+    from fastapi.responses import Response
+    return Response(
+        content=buf.read(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={safe_name}.xlsx"}
+    )
+
+# ── 任务（Task）：可视化配置 + 脚本的容器 ─────────────────────
+
+def _gen_script_from_config(cfg: dict) -> str:
+    """根据点击配置 config_json 生成 Python 脚本模板。"""
+    input_file = cfg.get("input_file", "") or ""
+    fields     = cfg.get("selected_fields") or []
+    template   = cfg.get("prompt_template", "") or ""
+    # 反斜杠用 raw 字符串规避
+    fields_py = json.dumps(fields, ensure_ascii=False)
+    template_py = json.dumps(template, ensure_ascii=False)
+    return f'''# 自动生成的批跑脚本（来自点击配置）
+# 在「点击配置」修改任何字段会实时重生成此代码,除非你手动编辑过
+import os, json, pandas as pd
+
+INPUT_FILE       = r"{input_file}"
+SELECTED_FIELDS  = {fields_py}
+PROMPT_TEMPLATE  = {template_py}
+
+df = pd.read_excel(INPUT_FILE) if INPUT_FILE.endswith((".xlsx", ".xls")) else (
+    pd.read_csv(INPUT_FILE) if INPUT_FILE.endswith(".csv") else
+    pd.read_json(INPUT_FILE) if INPUT_FILE.endswith(".json") else
+    pd.DataFrame()
+)
+print(f"已加载 {{len(df)}} 行")
+
+for i, row in df.iterrows():
+    if i in _RESUME_DONE:    # 续跑时跳过已完成行
+        continue
+    inp = {{f: row.get(f, "") for f in SELECTED_FIELDS}}
+    prompt = PROMPT_TEMPLATE
+    image_paths = []
+    # 对所有列做 {{field}} 替换,不限于 SELECTED_FIELDS,
+    # 避免用户在 prompt 里写了未点击 chip 的字段时未被替换
+    for col in row.index:
+        v = row[col]
+        sv = "" if (v is None or (isinstance(v, float) and pd.isna(v))) else str(v)
+        if isinstance(sv, str) and sv.lower().endswith((".png",".jpg",".jpeg",".gif",".webp")) and os.path.exists(sv):
+            if sv not in image_paths:
+                image_paths.append(sv)
+            prompt = prompt.replace("{{" + str(col) + "}}", "（见附图）")
+        else:
+            prompt = prompt.replace("{{" + str(col) + "}}", sv)
+    try:
+        if image_paths:
+            content = [{{"image": p}} for p in image_paths] + [prompt]
+            result = chat(content)
+        else:
+            result = chat(prompt)
+        record_row(i, input=inp, output=result, success=True)
+        df.at[i, "AI结果"] = result
+    except Exception as e:
+        record_row(i, input=inp, output="", success=False, error=str(e))
+
+output_path = os.path.join(WORK_DIR, "结果.xlsx")
+df.to_excel(output_path, index=False)
+save_file(output_path)
+'''
+
+
+class LintIn(BaseModel):
+    code: str
+
+@app.post("/batch2/lint")
+def lint_script(body: LintIn, x_token: str = Header(default="")):
+    get_current_user(x_token)
+    import ast as _ast
+    try:
+        _ast.parse(body.code or "")
+        return {"ok": True}
+    except SyntaxError as e:
+        return {"ok": False, "error": f"L{e.lineno} C{e.offset}: {e.msg}"}
+
+
+class BatchRunIn(BaseModel):
+    source_type: str = "click"          # 'click' | 'script'
+    task_name: str = ""
+    config_json: str = "{}"             # 点击配置：保存表单；脚本：可空
+    script_code: str = ""               # 脚本：用户脚本；点击配置：可空（由 config 自动生成）
+    request_id: int | None = None
+    model: str = ""
+    resume_job_id: int | None = None    # 续跑同一 job
+    rerun_from_job_id: int | None = None  # 基于历史 job 重跑（取其字段）
+
+def _next_batch_id(conn) -> str:
+    now_local = datetime.now()
+    stamp = now_local.strftime("%Y%m%d_%H%M%S")
+    existing = conn.execute(
+        "SELECT batch_id FROM batch_jobs WHERE batch_id LIKE ?", (f"B_{stamp}_%",)
+    ).fetchall()
+    seq = 1
+    for r in existing:
+        try:
+            n = int((r["batch_id"] or "").rsplit("_", 1)[-1])
+            if n >= seq: seq = n + 1
+        except Exception: pass
+    return f"B_{stamp}_{seq}"
+
+@app.post("/batch2/run")
+def batch_run(body: BatchRunIn, x_token: str = Header(default="")):
+    """统一启动入口：点击配置 / 脚本两种来源都走这里。
+    返回 SSE 流。每条 batch_jobs 自带完整 config_json + script_code,可独立重跑。"""
+    user = get_current_user(x_token)
+
+    source_type = (body.source_type or "click").lower()
+    if source_type not in ("click", "script"):
+        raise HTTPException(status_code=400, detail="source_type 必须为 click 或 script")
+
+    cfg = {}
+    try: cfg = json.loads(body.config_json or "{}")
+    except Exception: cfg = {}
+
+    task_name  = (body.task_name or "").strip()  # 空时下文用 batch_id 兜底
+    request_id = body.request_id or cfg.get("request_id")
+    model      = body.model or cfg.get("model") or ""
+
+    # 决定运行的代码
+    if source_type == "click":
+        code = _gen_script_from_config(cfg)
+    else:
+        code = (body.script_code or "").strip()
+        if not code:
+            raise HTTPException(status_code=400, detail="脚本不能为空")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    resume_done_csv = ""
+    job_id = None
+    batch_id = None
+
+    if body.resume_job_id:
+        with get_db() as conn:
+            job_row = conn.execute("SELECT * FROM batch_jobs WHERE id=?",
+                                   (body.resume_job_id,)).fetchone()
+            if not job_row or job_row["user_id"] != user["id"]:
+                raise HTTPException(status_code=403, detail="无权限")
+            done_idx = conn.execute(
+                "SELECT row_index FROM batch_job_rows WHERE job_id=? AND success=1",
+                (body.resume_job_id,)
+            ).fetchall()
+            resume_done_csv = ",".join(str(r["row_index"]) for r in done_idx)
+            conn.execute("UPDATE batch_jobs SET status='running' WHERE id=?",
+                         (body.resume_job_id,))
+            conn.commit()
+        job_id   = body.resume_job_id
+        batch_id = job_row["batch_id"]
+        # 续跑：用 job 自身存的代码/配置
+        try:
+            code = job_row["script_code"] or code
+            cfg  = json.loads(job_row["config_json"] or "{}") or cfg
+        except Exception: pass
+        source_type = job_row["source_type"] or source_type
+        task_name   = job_row["task_name"] or task_name
+        request_id  = request_id or cfg.get("request_id")
+        model       = model or job_row["model"]
+    else:
+        with get_db() as conn:
+            batch_id = _next_batch_id(conn)
+            # 任务名留空时,直接复用 batch_id —— 天然唯一,符合"同任务ID命名规则"
+            if not task_name:
+                task_name = batch_id
+            dup = conn.execute(
+                "SELECT id FROM batch_jobs WHERE user_id=? AND task_name=? LIMIT 1",
+                (user["id"], task_name)
+            ).fetchone()
+            if dup:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"任务名「{task_name}」已存在，请换一个名字"
+                )
+            settings = {
+                "source_type": source_type,
+                "task_name":   task_name,
+                "model":       model,
+                "request_id":  request_id,
+                "config":      cfg,
+            }
+            cur = conn.execute(
+                "INSERT INTO batch_jobs (user_id,task_name,model,config_id,label,row_count,"
+                "settings_json,created_at,started_at,batch_id,status,source_type,"
+                "script_code,config_json) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (user["id"], task_name, model, None, "", 0,
+                 json.dumps(settings, ensure_ascii=False), now_iso, now_iso,
+                 batch_id, "running", source_type, code, json.dumps(cfg, ensure_ascii=False))
+            )
+            job_id = cur.lastrowid
+            conn.commit()
+
+    run_id   = str(uuid.uuid4())
+    work_dir = os.path.join(SCRIPT_BASE_DIR, run_id)
+    os.makedirs(work_dir, exist_ok=True)
+    script_path = os.path.join(work_dir, "user_script.py")
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(code)
+
+    cmd = [
+        sys.executable, SCRIPT_WORKER,
+        "--run-id",     run_id,
+        "--script",     script_path,
+        "--work-dir",   work_dir,
+        "--token",      x_token,
+        "--config-id",  "",
+        "--request-id", str(request_id) if request_id else "",
+        "--model",      model or "",
+        "--file-path",  cfg.get("input_file", "") or "",
+        "--timeout",    str(SCRIPT_TIMEOUT),
+        "--job-id",     str(job_id),
+        "--resume-done-csv", resume_done_csv,
+    ]
+
+    async def generate():
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _RUNNING_PROCS[job_id] = proc
+        yield f"data: {json.dumps({'type':'task_started','job_id':job_id,'batch_id':batch_id,'run_id':run_id})}\n\n"
+        stdout_buffer = []   # 累积纯文本 stdout（用于脚本类型自动落 row）
+        stderr_buffer = []
+        try:
+            while True:
+                try:
+                    line = await asyncio.wait_for(
+                        proc.stdout.readline(), timeout=SCRIPT_TIMEOUT + 10)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    yield f"data: {json.dumps({'type':'error','text':'Worker 无响应'})}\n\n"
+                    break
+                if not line: break
+                text = line.decode("utf-8", errors="replace").strip()
+                if text:
+                    # 尝试解析 worker 的 JSON 行，捕获 stdout/stderr 文本
+                    try:
+                        evt = json.loads(text)
+                        if evt.get("type") == "stdout" and evt.get("text"):
+                            stdout_buffer.append(evt["text"])
+                        elif evt.get("type") == "stderr" and evt.get("text"):
+                            stderr_buffer.append(evt["text"])
+                    except Exception:
+                        pass
+                    yield f"data: {text}\n\n"
+            try:
+                err = await asyncio.wait_for(proc.stderr.read(), timeout=3)
+                if err:
+                    msg = err.decode("utf-8", errors="replace").strip()
+                    if msg:
+                        stderr_buffer.append(msg)
+                        yield f"data: {json.dumps({'type':'error','text':msg})}\n\n"
+            except asyncio.TimeoutError: pass
+        finally:
+            try: await proc.wait()
+            except Exception: pass
+            _RUNNING_PROCS.pop(job_id, None)
+            try:
+                with get_db() as conn:
+                    rr = conn.execute("SELECT row_count,done_count,fail_count,status,source_type FROM batch_jobs WHERE id=?",
+                                       (job_id,)).fetchone()
+                    if rr and rr["status"] != "paused":
+                        done = rr["done_count"] or 0
+                        fail = rr["fail_count"] or 0
+                        # 脚本类型未调 record_row 时，自动落一条 row 保留日志
+                        if (rr["source_type"] == "script") and done == 0 and fail == 0:
+                            rc = proc.returncode if proc.returncode is not None else 1
+                            success = 1 if rc == 0 else 0
+                            output = "".join(stdout_buffer).strip() or "(无 stdout 输出)"
+                            err_msg = "".join(stderr_buffer).strip() if not success else ""
+                            now_iso = datetime.now(timezone.utc).isoformat()
+                            conn.execute(
+                                "INSERT INTO batch_job_rows (job_id,row_index,input_json,output_text,output_type,output_path,label,success,error_msg,started_at,finished_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                (job_id, 0,
+                                 json.dumps({"脚本": "（用户脚本未调用 record_row）"}, ensure_ascii=False),
+                                 output, "text", "", "", success, err_msg, now_iso, now_iso)
+                            )
+                            if success: conn.execute("UPDATE batch_jobs SET done_count=1 WHERE id=?", (job_id,))
+                            else:       conn.execute("UPDATE batch_jobs SET fail_count=1 WHERE id=?", (job_id,))
+                            conn.execute("UPDATE batch_jobs SET row_count=MAX(row_count,1) WHERE id=?", (job_id,))
+                            done = success; fail = 1 - success
+
+                        if fail == 0 and done > 0: st = "completed"
+                        elif done == 0 and fail > 0: st = "failed"
+                        elif fail > 0: st = "partial_failed"
+                        else: st = "completed"
+                        conn.execute("UPDATE batch_jobs SET status=?, finished_at=? WHERE id=?",
+                                     (st, datetime.now(timezone.utc).isoformat(), job_id))
+                        conn.commit()
+            except Exception: pass
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/batch2/jobs/{job_id}/pause")
+def pause_job(job_id: int, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        row = conn.execute("SELECT user_id FROM batch_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row or row["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="无权限")
+        conn.execute("UPDATE batch_jobs SET status='paused' WHERE id=?", (job_id,))
+        conn.commit()
+    proc = _RUNNING_PROCS.pop(job_id, None)
+    if proc:
+        try: proc.kill()
+        except Exception: pass
     return {"ok": True}
+
+class JobActionIn(BaseModel):
+    request_id: int | None = None
+    model: str = ""
+
+@app.post("/batch2/jobs/{job_id}/resume")
+def resume_job(job_id: int, body: JobActionIn, x_token: str = Header(default="")):
+    """续跑同一个 job，跳过已完成行。"""
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM batch_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row or row["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="无权限")
+    return batch_run(BatchRunIn(
+        source_type   = row["source_type"] or "click",
+        task_name     = row["task_name"] or "",
+        config_json   = row["config_json"] or "{}",
+        script_code   = row["script_code"] or "",
+        request_id    = body.request_id,
+        model         = body.model or row["model"] or "",
+        resume_job_id = job_id,
+    ), x_token=x_token)
+
+@app.post("/batch2/jobs/{job_id}/rerun")
+def rerun_job(job_id: int, body: JobActionIn, x_token: str = Header(default="")):
+    """基于历史 job 的 config + script，开一个全新批次。"""
+    user = get_current_user(x_token)
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM batch_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row or row["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="无权限")
+    base_name = row["task_name"] or "NA"
+    suffix = datetime.now().strftime("%H%M%S")
+    new_name = f"{base_name}_rerun{suffix}"
+    return batch_run(BatchRunIn(
+        source_type = row["source_type"] or "click",
+        task_name   = new_name,
+        config_json = row["config_json"] or "{}",
+        script_code = row["script_code"] or "",
+        request_id  = body.request_id,
+        model       = body.model or row["model"] or "",
+    ), x_token=x_token)
+
 
 @app.get("/batch2/jobs")
 def list_batch_jobs(x_token: str = Header(default="")):
     user = get_current_user(x_token)
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM batch_jobs WHERE user_id=? ORDER BY created_at DESC LIMIT 50",
+            "SELECT * FROM batch_jobs WHERE user_id=? ORDER BY created_at DESC LIMIT 100",
             (user["id"],)
         ).fetchall()
     return [dict(r) for r in rows]
 
 @app.get("/batch2/jobs/{job_id}/rows")
-def get_batch_job_rows(job_id: int, x_token: str = Header(default="")):
+def get_batch_job_rows(job_id: int, offset: int = 0, limit: int = 0,
+                       x_token: str = Header(default="")):
     user = get_current_user(x_token)
     with get_db() as conn:
         job = conn.execute("SELECT user_id FROM batch_jobs WHERE id=?", (job_id,)).fetchone()
         if not job or job["user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="无权限")
-        rows = conn.execute(
-            "SELECT * FROM batch_job_rows WHERE job_id=? ORDER BY row_index",
-            (job_id,)
-        ).fetchall()
-    return [dict(r) for r in rows]
+        total = conn.execute("SELECT COUNT(*) AS c FROM batch_job_rows WHERE job_id=?",
+                              (job_id,)).fetchone()["c"]
+        if limit > 0:
+            rows = conn.execute(
+                "SELECT * FROM batch_job_rows WHERE job_id=? ORDER BY row_index LIMIT ? OFFSET ?",
+                (job_id, limit, offset)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM batch_job_rows WHERE job_id=? ORDER BY row_index", (job_id,)
+            ).fetchall()
+    return {"total": total, "rows": [dict(r) for r in rows]} if limit > 0 else [dict(r) for r in rows]
 
 # ── ClickHouse ────────────────────────────────────────────
 
@@ -1462,9 +2801,15 @@ def ensure_ch_tables():
                 row_count   UInt32,
                 status      String,
                 config_name String,
+                settings_json String DEFAULT '',
                 created_at  DateTime DEFAULT now()
             ) ENGINE = MergeTree() ORDER BY created_at
         """)
+        # 老表兼容：补字段（已存在则忽略）
+        try:
+            ch.command("ALTER TABLE batch_tasks ADD COLUMN IF NOT EXISTS settings_json String DEFAULT ''")
+        except Exception:
+            pass
         ch.command("""
             CREATE TABLE IF NOT EXISTS batch_inputs (
                 task_id     String,
@@ -1488,6 +2833,23 @@ def ensure_ch_tables():
                 created_at  DateTime DEFAULT now()
             ) ENGINE = MergeTree() ORDER BY (task_id, row_index)
         """)
+        ch.command("""
+            CREATE TABLE IF NOT EXISTS datasets (
+                dataset_id  String,
+                name        String,
+                row_count   UInt32,
+                headers     String,
+                created_by  String,
+                created_at  DateTime DEFAULT now()
+            ) ENGINE = MergeTree() ORDER BY created_at
+        """)
+        ch.command("""
+            CREATE TABLE IF NOT EXISTS dataset_rows (
+                dataset_id  String,
+                row_index   UInt32,
+                row_json    String
+            ) ENGINE = MergeTree() ORDER BY (dataset_id, row_index)
+        """)
     except Exception:
         pass  # ClickHouse 未配置时静默忽略
 
@@ -1510,6 +2872,7 @@ class BatchStartIn(BaseModel):
     config_id: int | None = None
     config_name: str = ""
     model: str = ""
+    settings_json: str = ""
 
 class BatchRowIn(BaseModel):
     task_id: str
@@ -1532,8 +2895,8 @@ def batch_start(body: BatchStartIn, x_token: str = Header(default="")):
         ch = get_ch_client()
         ch.insert("batch_tasks", [[
             task_id, body.task_name, body.label,
-            body.row_count, "running", body.config_name
-        ]], column_names=["task_id","task_name","label","row_count","status","config_name"])
+            body.row_count, "running", body.config_name, body.settings_json,
+        ]], column_names=["task_id","task_name","label","row_count","status","config_name","settings_json"])
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"ClickHouse 写入失败：{e}")
     return {"task_id": task_id}
@@ -1618,19 +2981,113 @@ def batch_results(task_id: str, x_token: str = Header(default="")):
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 
+# ── 平台数据集（供批跑选用） ───────────────────────────────
+
+class DatasetCreateIn(BaseModel):
+    name: str
+    rows: list[dict]  # 每行是 {字段: 值, ...}
+
+@app.get("/datasets")
+def list_datasets(x_token: str = Header(default="")):
+    get_current_user(x_token)
+    try:
+        ensure_ch_tables()
+        ch = get_ch_client()
+        rows = ch.query("SELECT dataset_id, name, row_count, headers, created_by, created_at FROM datasets ORDER BY created_at DESC LIMIT 200")
+        return [dict(zip(rows.column_names, r)) for r in rows.result_rows]
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+@app.post("/datasets")
+def create_dataset(body: DatasetCreateIn, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="数据集名称不能为空")
+    if not body.rows:
+        raise HTTPException(status_code=400, detail="数据集为空")
+    dataset_id = str(uuid.uuid4())
+    headers = list(body.rows[0].keys())
+    try:
+        ensure_ch_tables()
+        ch = get_ch_client()
+        ch.insert("datasets", [[
+            dataset_id, body.name.strip(), len(body.rows),
+            json.dumps(headers, ensure_ascii=False),
+            user.get("username", "") if isinstance(user, dict) else "",
+        ]], column_names=["dataset_id","name","row_count","headers","created_by"])
+        BATCH = 500
+        data = [[dataset_id, i, json.dumps(r, ensure_ascii=False)] for i, r in enumerate(body.rows)]
+        for b in range(0, len(data), BATCH):
+            ch.insert("dataset_rows", data[b:b+BATCH], column_names=["dataset_id","row_index","row_json"])
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"ClickHouse 写入失败：{e}")
+    return {"dataset_id": dataset_id, "row_count": len(body.rows)}
+
+@app.get("/datasets/{dataset_id}/rows")
+def get_dataset_rows(dataset_id: str, x_token: str = Header(default="")):
+    get_current_user(x_token)
+    try:
+        ch = get_ch_client()
+        rows = ch.query(
+            "SELECT row_index, row_json FROM dataset_rows WHERE dataset_id=%(did)s ORDER BY row_index",
+            parameters={"did": dataset_id}
+        )
+        out = []
+        for ri, rj in rows.result_rows:
+            try:
+                out.append(json.loads(rj))
+            except Exception:
+                out.append({})
+        return out
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+@app.delete("/datasets/{dataset_id}")
+def delete_dataset(dataset_id: str, x_token: str = Header(default="")):
+    user = get_current_user(x_token)
+    if isinstance(user, dict) and user.get("role") != "admin":
+        # 非 admin 只能删自己创建的
+        try:
+            ch = get_ch_client()
+            r = ch.query("SELECT created_by FROM datasets WHERE dataset_id=%(d)s", parameters={"d": dataset_id})
+            if r.result_rows and r.result_rows[0][0] != user.get("username"):
+                raise HTTPException(status_code=403, detail="无权删除他人创建的数据集")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+    try:
+        ch = get_ch_client()
+        ch.command(f"ALTER TABLE datasets DELETE WHERE dataset_id='{dataset_id}'")
+        ch.command(f"ALTER TABLE dataset_rows DELETE WHERE dataset_id='{dataset_id}'")
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {"ok": True}
+
 # ── 保存结果到本地文件 ─────────────────────────────────────
 
 class SaveResultIn(BaseModel):
     path: str
     content: str
+    encoding: str = "text"  # "text" | "base64"
 
 @app.post("/save-result")
 def save_result(body: SaveResultIn, x_token: str = Header(default="")):
     get_current_user(x_token)
     try:
-        with open(body.path, 'w', encoding='utf-8') as f:
-            f.write(body.content)
-        return {"ok": True}
+        # 防御：确保父目录存在
+        parent = os.path.dirname(body.path)
+        if parent and not os.path.exists(parent):
+            os.makedirs(parent, exist_ok=True)
+        if body.encoding == "base64":
+            import base64
+            data = base64.b64decode(body.content)
+            with open(body.path, 'wb') as f:
+                f.write(data)
+        else:
+            with open(body.path, 'w', encoding='utf-8') as f:
+                f.write(body.content)
+        return {"ok": True, "path": body.path}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1640,8 +3097,9 @@ import tempfile, threading
 
 SCRIPT_BASE_DIR = os.path.join(tempfile.gettempdir(), "script_runs")
 os.makedirs(SCRIPT_BASE_DIR, exist_ok=True)
+_RUNNING_PROCS: dict[int, asyncio.subprocess.Process] = {}   # job_id -> proc
 SCRIPT_WORKER   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "script_worker.py")
-SCRIPT_TIMEOUT  = 30
+SCRIPT_TIMEOUT  = 600
 SCRIPT_MAX_SIZE = 1024 ** 3  # 1 GB
 
 def _check_approved(user_id: int):
@@ -1690,11 +3148,12 @@ async def script_upload(file: UploadFile, x_token: str = Header(default="")):
 
 @app.post("/script/run")
 async def script_run(
-    code:      str      = Body(...),
-    config_id: int|None = Body(None),
-    model:     str      = Body(""),
-    file_id:   str|None = Body(None),
-    x_token:   str      = Header(default="")
+    code:       str      = Body(...),
+    config_id:  int|None = Body(None),
+    request_id: int|None = Body(None),
+    model:      str      = Body(""),
+    file_id:    str|None = Body(None),
+    x_token:    str      = Header(default="")
 ):
     user = get_current_user(x_token)
     _check_approved(user["id"])
@@ -1709,14 +3168,15 @@ async def script_run(
 
     cmd = [
         sys.executable, SCRIPT_WORKER,
-        "--run-id",    run_id,
-        "--script",    script_path,
-        "--work-dir",  work_dir,
-        "--token",     x_token,
-        "--config-id", str(config_id) if config_id else "",
-        "--model",     model or "",
-        "--file-path", file_id or "",
-        "--timeout",   str(SCRIPT_TIMEOUT),
+        "--run-id",     run_id,
+        "--script",     script_path,
+        "--work-dir",   work_dir,
+        "--token",      x_token,
+        "--config-id",  str(config_id) if config_id else "",
+        "--request-id", str(request_id) if request_id else "",
+        "--model",      model or "",
+        "--file-path",  file_id or "",
+        "--timeout",    str(SCRIPT_TIMEOUT),
     ]
 
     async def generate():
@@ -1761,8 +3221,9 @@ async def script_run(
 
 
 @app.get("/script/result/{run_id}/download")
-def script_download(run_id: str, x_token: str = Header(default="")):
-    get_current_user(x_token)
+def script_download(run_id: str, token: str = "", x_token: str = Header(default="")):
+    # 浏览器直接打开 <a href> 无法附带 X-Token header,允许通过 query 传 token
+    get_current_user(x_token or token)
     work_dir = os.path.join(SCRIPT_BASE_DIR, run_id)
     if not os.path.isdir(work_dir):
         raise HTTPException(status_code=404, detail="运行结果不存在或已过期")
@@ -1783,21 +3244,10 @@ def script_download(run_id: str, x_token: str = Header(default="")):
     )
 
 
-# ── 后台清理（每小时删除 24h 前的运行目录）────────────────
+# ── 后台清理（已禁用：保留所有运行目录,供处理历史下载）────
 def _cleanup_old_runs():
-    import shutil
-    cutoff = time.time() - 86400
-    try:
-        for name in os.listdir(SCRIPT_BASE_DIR):
-            path = os.path.join(SCRIPT_BASE_DIR, name)
-            if os.path.isdir(path):
-                try:
-                    if os.path.getmtime(path) < cutoff:
-                        shutil.rmtree(path, ignore_errors=True)
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    # 用户要求永久保留脚本运行结果,不再自动清理
+    return
 
 def _start_cleanup_thread():
     def loop():
@@ -1817,6 +3267,141 @@ app.mount("/config", StaticFiles(directory=os.path.join(_ROOT, "config")), name=
 if os.path.isdir(os.path.join(_ROOT, "src")):
     app.mount("/src", StaticFiles(directory=os.path.join(_ROOT, "src")), name="src")
 
+
+# ── 交互式终端（PTY + WebSocket）─────────────────────────────────
+def _check_ws_token(token: str) -> dict | None:
+    if not token:
+        return None
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT u.* FROM users u JOIN user_tokens t ON t.user_id=u.id WHERE t.token=?",
+                (token,),
+            ).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
+@app.websocket("/terminal")
+async def terminal_ws(ws: WebSocket):
+    await ws.accept()
+    token = ws.query_params.get("token", "")
+    user = _check_ws_token(token)
+    if not user:
+        await ws.send_text(json.dumps({"type": "error", "msg": "未登录或登录已过期"}))
+        await ws.close()
+        return
+
+    import pty, fcntl, termios, struct, signal, select, errno
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        # 子进程：进入项目根目录后启动 shell
+        try:
+            os.chdir(_ROOT)
+        except Exception:
+            pass
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        env["PS1"] = r"\w $ "
+        shell = os.environ.get("SHELL") or "/bin/bash"
+        try:
+            os.execvpe(shell, [shell, "-l"], env)
+        except Exception:
+            os.execvpe("/bin/sh", ["/bin/sh"], env)
+        return
+
+    def _set_size(rows: int, cols: int):
+        try:
+            fcntl.ioctl(fd, termios.TIOCSWINSZ,
+                        struct.pack("HHHH", rows, cols, 0, 0))
+        except Exception:
+            pass
+
+    _set_size(30, 100)
+    loop = asyncio.get_event_loop()
+    closed = False
+
+    async def pty_to_ws():
+        nonlocal closed
+        while not closed:
+            try:
+                ready = await loop.run_in_executor(None, select.select, [fd], [], [], 0.5)
+                if not ready[0]:
+                    if closed:
+                        break
+                    continue
+                data = await loop.run_in_executor(None, os.read, fd, 4096)
+                if not data:
+                    break
+                await ws.send_bytes(data)
+            except OSError as e:
+                if e.errno == errno.EIO:
+                    break
+                if closed:
+                    break
+                continue
+            except Exception:
+                break
+        closed = True
+
+    pump_task = asyncio.create_task(pty_to_ws())
+    try:
+        while True:
+            msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            if "bytes" in msg and msg["bytes"] is not None:
+                try:
+                    os.write(fd, msg["bytes"])
+                except OSError:
+                    break
+                continue
+            text = msg.get("text")
+            if not text:
+                continue
+            try:
+                obj = json.loads(text)
+            except Exception:
+                try:
+                    os.write(fd, text.encode("utf-8"))
+                except OSError:
+                    break
+                continue
+            t = obj.get("type")
+            if t == "input":
+                try:
+                    os.write(fd, (obj.get("data") or "").encode("utf-8"))
+                except OSError:
+                    break
+            elif t == "resize":
+                _set_size(int(obj.get("rows", 30)), int(obj.get("cols", 100)))
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        closed = True
+        try:
+            os.kill(pid, signal.SIGHUP)
+        except Exception:
+            pass
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except Exception:
+            pass
+        pump_task.cancel()
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
 @app.get("/")
 def serve_index():
     return FileResponse(os.path.join(_ROOT, "index.html"))
@@ -1827,4 +3412,5 @@ def serve_index_explicit():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # reload=True 需要传 "module:attr" 字符串形式,让 uvicorn 自己 import,这样改 .py 文件可热重载
+    uvicorn.run("server:app", host="127.0.0.1", port=8000, reload=True)

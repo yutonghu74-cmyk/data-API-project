@@ -6,25 +6,29 @@
   <title>批量处理 — 数据平台</title>
   <link rel="stylesheet" href="../assets/css/platform.css">
   <script>if(new URLSearchParams(location.search).get('embed')==='1')document.documentElement.classList.add('embed-mode');</script>
-  <!-- SheetJS for Excel parsing -->
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <!-- Monaco Editor（懒加载，进入脚本 Tab 时初始化）-->
+  <script>var require = { paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } };</script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
   <style>
     html.embed-mode .top-bar,
     html.embed-mode .breadcrumb,
     html.embed-mode .sidebar { display: none !important; }
+    /* 嵌入(iframe)模式下,父页面已有「在线使用/批量处理」sub-tab,这里隐藏空的 .toolbar
+       并压缩 .main 顶部 padding,把"批量处理 sub-tab"与"前端配置 tab"间距缩到 ≈10px */
+    html.embed-mode .toolbar { display: none !important; }
     html.embed-mode .layout { padding-top: 0 !important; }
-    html.embed-mode .main { margin-left: 0 !important; padding: 16px !important; }
-    .steps { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
-    .step-btn {
-      padding: 10px 20px; font-size: .88rem; cursor: pointer;
+    html.embed-mode .main { margin-left: 0 !important; padding: 10px 16px 16px !important; }
+
+    .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+    .tab-btn {
+      padding: 10px 24px; font-size: .9rem; cursor: pointer;
       border: none; background: none; color: var(--text-muted);
       border-bottom: 2px solid transparent; margin-bottom: -1px;
     }
-    .step-btn.active { color: var(--green); border-bottom-color: var(--green); font-weight: 500; }
-    .step-btn.done { color: var(--text-muted); }
-    .step-btn.done::after { content: ' ✓'; color: var(--green); }
-    .step-panel { display: none; }
-    .step-panel.active { display: block; }
+    .tab-btn.active { color: var(--green); border-bottom-color: var(--green); font-weight: 500; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
 
     .field-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     .field-chip {
@@ -35,8 +39,7 @@
     }
     .field-chip.selected { background: var(--green-bg); border-color: var(--green); color: var(--green); font-weight: 500; }
 
-    .preview-table { max-height: 220px; overflow: auto; }
-
+    .preview-table { max-height: 220px; overflow: auto; margin-top: 12px; }
     .progress-bar-wrap { background: var(--surface); border-radius: 6px; height: 10px; margin: 10px 0; overflow: hidden; }
     .progress-bar { height: 100%; background: var(--green); border-radius: 6px; transition: width .3s; }
 
@@ -44,42 +47,154 @@
     .result-status-err { color: #dc2626; font-size: .8rem; }
     .result-status-ing { color: #f59e0b; font-size: .8rem; }
 
-    .ch-status { display: inline-flex; align-items: center; gap: 6px; font-size: .82rem; }
-    .ch-dot { width: 8px; height: 8px; border-radius: 50%; }
-    .ch-dot.ok  { background: var(--green); }
-    .ch-dot.err { background: #dc2626; }
-    .ch-dot.unk { background: #9ca3af; }
-
     .template-help { font-size: .8rem; color: var(--text-muted); margin-top: 6px; }
     code { background: var(--surface); padding: 1px 5px; border-radius: 3px; font-size: .85em; }
+
+    .section-title { font-size: .92rem; font-weight: 500; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+    .section-title:first-child { margin-top: 0; }
+
+    /* ── 表单校验红色提示 ────────────────────────────────── */
+    .field-invalid { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,.12); }
+    label.field-invalid, .section-title.field-invalid { color: #dc2626; border-bottom-color: #dc2626; }
+
+    .history-list-item { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+    .history-list-item:hover { background: var(--surface); }
+
+    /* ── 历史 - 状态徽章 / 进度条 / 缩略图 ─────────────────── */
+    .status-badge {
+      display:inline-block; padding:2px 8px; border-radius:10px;
+      font-size:.72rem; font-weight:500; white-space:nowrap;
+    }
+    .status-badge.queued    { background:#e5e7eb; color:#4b5563; }
+    .status-badge.running   { background:#fef3c7; color:#92400e; }
+    .status-badge.completed { background:var(--green-bg); color:var(--green); }
+    .status-badge.failed    { background:#fee2e2; color:#dc2626; }
+    .status-badge.partial   { background:#ffedd5; color:#c2410c; }
+    .mini-progress {
+      width:130px; height:8px; background:var(--surface); border-radius:5px;
+      overflow:hidden; display:inline-block; vertical-align:middle;
+    }
+    .mini-progress > div { height:100%; background:var(--green); transition:width .3s; }
+    .img-thumb {
+      width:48px; height:48px; object-fit:cover; border-radius:4px;
+      cursor:zoom-in; border:1px solid var(--border); margin:2px;
+      transition:transform .15s;
+    }
+    .img-thumb:hover { transform:scale(1.5); z-index:10; position:relative; box-shadow:0 4px 12px rgba(0,0,0,.3); }
+    .img-thumb.broken {
+      background:repeating-linear-gradient(45deg,#f3f4f6,#f3f4f6 6px,#e5e7eb 6px,#e5e7eb 12px);
+      display:inline-block; cursor:default;
+    }
+    #historyTable th, #historyTable td { padding:8px 10px; font-size:.85rem; }
+    #historyTable thead th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+    #historyTable thead th.sortable:hover { background:var(--surface); }
+    #historyTable thead th.sortable .sort-ind {
+      display:inline-block; margin-left:4px;
+      font-size:.7rem; opacity:.35; color:var(--text-muted);
+    }
+    #historyTable thead th.sortable.sort-asc  .sort-ind { opacity:1; color:var(--green); }
+    #historyTable thead th.sortable.sort-desc .sort-ind { opacity:1; color:var(--green); }
+    #historyTable thead .filter-row th { padding:4px 6px; background:var(--surface); }
+    #historyTable thead .filter-row input,
+    #historyTable thead .filter-row select {
+      width:100%; padding:3px 6px; font-size:.75rem;
+      border:1px solid var(--border); border-radius:4px; background:#fff;
+      box-sizing:border-box; font-family:inherit; color:var(--text);
+    }
+
+    .row-failed { background:#fef2f2; }
+    .row-failed:hover { background:#fee2e2; }
+    .copy-btn {
+      padding:2px 6px; font-size:.7rem; border:1px solid var(--border);
+      background:#fff; border-radius:3px; cursor:pointer; color:var(--text-muted);
+    }
+    .copy-btn:hover { background:var(--surface); color:var(--text); }
+
+    /* ── 前端配置 (与脚本配置同款左右双栏) ──────────────────── */
+    #tab-click-config.active { display: flex; flex-direction: column; }
+    #tab-click-config { height: calc(100vh - 200px); min-height: 460px; }
+    .click-layout { display:flex; height:100%; }
+    .click-left {
+      width:50%; min-width:320px; display:flex; flex-direction:column;
+      border-right:1px solid var(--border); padding:12px 16px; gap:8px; overflow-y:auto;
+    }
+    .click-left .section-title { margin-top: 12px; }
+    .click-left .section-title:first-child { margin-top: 0; }
+    .click-right { flex:1; display:flex; flex-direction:column; min-width:0; }
+    .click-out-tabs { display:flex; border-bottom:1px solid var(--border); background:#fff; flex-shrink:0; }
+    .click-out-tab {
+      padding:8px 16px; font-size:.85rem; cursor:pointer; border:none; background:none;
+      color:var(--text-muted); border-bottom:2px solid transparent;
+    }
+    .click-out-tab.active { color:var(--green); border-bottom-color:var(--green); font-weight:500; }
+    .click-out-panel { display:none; flex:1; overflow:hidden; flex-direction:column; }
+    .click-out-panel.active { display:flex; }
+    .click-log {
+      flex:1; overflow-y:auto; padding:12px 16px;
+      font-family:monospace; font-size:.82rem; line-height:1.6;
+      background:var(--surface); white-space:pre-wrap; word-break:break-word;
+    }
+    .click-progress { padding: 10px 16px; border-bottom: 1px solid var(--border); background: #fff; flex-shrink: 0; }
+
+    /* ── 脚本编辑器 ──────────────────────────────────────── */
+    #tab-script.active { display: flex; flex-direction: column; }
+    #tab-script { height: calc(100vh - 200px); min-height: 460px; }
+    .script-layout { display:flex; height:100%; }
+    .script-left {
+      width:50%; min-width:300px; display:flex; flex-direction:column;
+      border-right:1px solid var(--border); padding:10px; gap:8px; overflow:hidden;
+    }
+    .script-right { flex:1; display:flex; flex-direction:column; min-width:0; }
+    .script-file-drop {
+      border:2px dashed var(--border); border-radius:var(--radius);
+      padding:8px 14px; cursor:pointer; text-align:center;
+      font-size:.83rem; color:var(--text-muted); transition:border-color .15s;
+    }
+    .script-file-drop:hover,.script-file-drop.dragover {
+      border-color:var(--green); color:var(--green); background:var(--green-bg);
+    }
+    .script-config { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; flex-shrink:0; }
+    .script-config .form-group label { font-size:.74rem; }
+    .script-editor-container {
+      flex:1; min-height:0; border:1px solid var(--border);
+      border-radius:var(--radius); overflow:hidden;
+    }
+    .script-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; padding-top:2px; }
+    .script-out-tabs { display:flex; border-bottom:1px solid var(--border); background:#fff; flex-shrink:0; }
+    .script-out-tab {
+      padding:8px 16px; font-size:.85rem; cursor:pointer; border:none; background:none;
+      color:var(--text-muted); border-bottom:2px solid transparent;
+    }
+    .script-out-tab.active { color:var(--green); border-bottom-color:var(--green); font-weight:500; }
+    .script-out-panel { display:none; flex:1; overflow:hidden; flex-direction:column; }
+    .script-out-panel.active { display:flex; }
+    .script-log {
+      flex:1; overflow-y:auto; padding:12px 16px;
+      font-family:monospace; font-size:.82rem; line-height:1.6;
+      background:var(--surface); white-space:pre-wrap; word-break:break-word;
+    }
+    .log-stdout { color:var(--text); }
+    .log-stderr { color:#e06c75; }
+    .log-error  { color:#dc2626; }
+    .log-info   { color:#6b7280; font-style:italic; }
+    .script-log img   { max-width:100%; border-radius:6px; margin:4px 0; cursor:zoom-in; display:block; }
+    .script-log video { max-width:100%; border-radius:6px; margin:4px 0; display:block; }
+    .script-file-badge {
+      background:var(--green); color:#fff; border-radius:10px;
+      font-size:.7rem; padding:0 5px; margin-left:4px; min-width:16px;
+      display:inline-flex; align-items:center; justify-content:center;
+    }
+    .result-file-item {
+      display:flex; align-items:center; gap:10px;
+      padding:10px 14px; border-bottom:1px solid var(--border); font-size:.83rem;
+    }
+    .result-file-item .file-name { flex:1; font-family:monospace; word-break:break-all; }
+    .result-file-item .file-size { color:var(--text-muted); font-size:.75rem; flex-shrink:0; }
   </style>
 </head>
 <body>
 
-<!-- 顶部固定导航栏 -->
-<div class="top-bar">
-  <button class="sidebar-toggle" id="sidebarToggle">☰</button>
-  <span class="brand">数据平台</span>
-  <div style="flex:1"></div>
-  <div class="breadcrumb-right" id="userBar"></div>
-</div>
-
 <div class="layout">
-  <div class="sidebar">
-    <div class="sidebar-group open" id="sg1">
-      <div class="sidebar-group-title" onclick="document.getElementById('sg1').classList.toggle('open')">
-        三方API管理 <span class="arrow">›</span>
-      </div>
-      <div class="sidebar-children">
-        <a href="claude.html"  class="sidebar-item">API调用</a>
-        <a href="apply.html"   class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item sidebar-admin" id="keysLink">密钥管理</a>
-        <a href="stats.html"   class="sidebar-item">使用统计</a>
-        <a href="users.html"   class="sidebar-item sidebar-admin" id="usersLink">用户管理</a>
-      </div>
-    </div>
-  </div>
-
   <div class="main">
     <div class="breadcrumb">
       <a href="#">三方API管理</a>
@@ -88,115 +203,273 @@
     </div>
     <div class="toolbar">
       <span class="page-title" style="margin:0">批量处理</span>
-      <details class="ch-status" id="chStatus">
-        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px">
-          <span class="ch-dot unk" id="chDot"></span>
-          <span id="chText">检查 ClickHouse...</span>
-        </summary>
-        <pre id="chDetail" style="margin:6px 0 0;font-size:.72rem;color:#6b7280;white-space:pre-wrap;max-width:480px"></pre>
-      </details>
     </div>
 
-    <!-- 步骤导航 -->
-    <div class="steps">
-      <button class="step-btn active" data-step="1">① 上传文件</button>
-      <button class="step-btn" data-step="2">② 选择字段</button>
-      <button class="step-btn" data-step="3">③ 配置任务</button>
-      <button class="step-btn" data-step="4">④ 批跑 & 结果</button>
+    <!-- Tab 导航 -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="click-config">前端配置</button>
+      <button class="tab-btn" data-tab="script">脚本配置</button>
+      <button class="tab-btn" data-tab="history">任务列表</button>
     </div>
 
-    <!-- Step 1: 上传文件 -->
-    <div class="step-panel active" id="step-1">
-      <div class="card">
-        <div class="form-group">
-          <label>选择文件 <span style="color:var(--text-muted);font-weight:400">（支持 CSV / Excel / JSON）</span></label>
-          <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.json" style="padding:6px">
+    <!-- Tab 1: 点击配置 -->
+    <div class="tab-panel active" id="tab-click-config">
+      <div class="click-layout">
+        <!-- 左侧:配置 -->
+        <div class="click-left">
+          <div class="section-title">任务名称</div>
+          <div class="form-group">
+            <input id="taskName" placeholder="例如 2026-05-18_产品评论分析（留空则用 YYYY-MM-DD_NA）">
+          </div>
+
+          <div class="section-title">上传文件</div>
+          <div class="form-group">
+            <label>选择文件 <span style="color:var(--text-muted);font-weight:400">（支持 CSV / Excel / JSON）</span></label>
+            <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.json" style="padding:6px">
+          </div>
+          <div id="fileInfo" style="font-size:.85rem;color:var(--text-muted);margin-top:8px"></div>
+          <div class="preview-table" id="previewTable"></div>
+
+          <div class="section-title">选择字段</div>
+          <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:8px">选择要作为 AI 输入的字段（可多选）：</p>
+          <div class="field-list" id="fieldList"></div>
+
+          <div class="section-title">API 配置</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+            <div class="form-group" style="margin:0">
+              <label>供应商</label>
+              <select id="providerSelect"><option value="">— 请选择 —</option></select>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label>API名称</label>
+              <select id="configSelect"><option value="">— 请选择 —</option></select>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label>模型</label>
+              <select id="modelSelect"><option value="">— 请选择 —</option></select>
+            </div>
+          </div>
+          <div class="form-group" style="margin-top:16px">
+            <label>Prompt 模板</label>
+            <textarea id="promptTemplate" rows="4"
+              placeholder="使用 {字段名} 引用字段，例如：&#10;请分析以下评论的情感倾向：{评论内容}&#10;产品名称：{产品名}"></textarea>
+            <div class="template-help">可用字段：<span id="availableFields">—</span></div>
+          </div>
+
+          <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary" id="startBatchBtn" disabled>开始批跑</button>
+            <button class="btn btn-secondary" id="stopBtn" style="display:none">暂停</button>
+            <button class="btn btn-primary" id="exportBtn" style="display:none">导出 CSV</button>
+          </div>
         </div>
-        <div id="fileInfo" style="font-size:.85rem;color:var(--text-muted);margin-top:8px"></div>
-        <div class="preview-table" id="previewTable" style="margin-top:12px"></div>
-        <div style="margin-top:16px">
-          <button class="btn btn-primary" id="nextStep1" disabled>下一步 →</button>
+
+        <!-- 右侧:运行日志 / 结果 -->
+        <div class="click-right">
+          <div class="click-out-tabs">
+            <button class="click-out-tab active" data-cout="log">运行日志</button>
+            <button class="click-out-tab" data-cout="result">结果</button>
+          </div>
+          <div class="click-out-panel active" id="clickOutLog">
+            <div class="click-progress" id="batchProgressCard" style="display:none">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <span style="font-size:.9rem;font-weight:500" id="progressText">准备中…</span>
+                <span style="font-size:.82rem;color:var(--text-muted)" id="progressDetail"></span>
+              </div>
+              <div class="progress-bar-wrap" style="margin:0"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
+            </div>
+            <div class="click-log" id="batchLog">
+              <span style="color:var(--text-muted);font-size:.82rem">点击「开始批跑」后输出将显示在这里</span>
+            </div>
+          </div>
+          <div class="click-out-panel" id="clickOutResult">
+            <div id="batchResultCard" style="flex:1;overflow:auto">
+              <table id="resultTable" style="width:100%">
+                <thead id="resultHead"></thead>
+                <tbody id="resultBody"></tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Step 2: 选择字段 -->
-    <div class="step-panel" id="step-2">
-      <div class="card">
-        <p style="font-size:.88rem;color:var(--text-muted);margin-bottom:12px">选择要作为 AI 输入的字段（可多选）：</p>
-        <div class="field-list" id="fieldList"></div>
-        <div style="margin-top:20px;display:flex;gap:10px">
-          <button class="btn btn-secondary" id="prevStep2">← 上一步</button>
-          <button class="btn btn-primary"   id="nextStep2" disabled>下一步 →</button>
+    <!-- Tab 3: 脚本编辑器 -->
+    <div class="tab-panel" id="tab-script">
+      <div class="script-layout">
+        <div class="script-left">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;flex-shrink:0">
+            <div class="form-group" style="margin:0">
+              <label style="font-size:.74rem">任务名称</label>
+              <input id="scriptTaskName" placeholder="例如 2026-05-18_产品评论分析（留空则用 YYYY-MM-DD_NA）">
+            </div>
+            <div class="form-group" style="margin:0">
+              <label style="font-size:.74rem">任务ID（运行后由系统分配）</label>
+              <input id="scriptTaskIdPreview" disabled placeholder="—" style="background:var(--surface);color:var(--text-muted);font-family:monospace">
+            </div>
+          </div>
+          <div id="scriptFileArea">
+            <input type="file" id="scriptFileInput"
+                   accept=".parquet,.json,.csv,.xlsx,.xls" style="display:none">
+            <div class="script-file-drop" id="scriptFileDrop">
+              <div>📂 拖拽或点击上传数据文件</div>
+              <div style="font-size:.73rem;color:var(--text-muted)">.parquet / .json / .csv / .xlsx</div>
+            </div>
+            <div id="scriptFileInfo" style="display:none;align-items:center;padding:6px 2px;gap:8px">
+              <span id="scriptFileName" style="font-size:.82rem;font-weight:500"></span>
+              <span id="scriptFileStats" style="font-size:.75rem;color:var(--text-muted)"></span>
+              <button class="btn btn-secondary" id="scriptFileClear"
+                      style="padding:2px 8px;font-size:.75rem">✕</button>
+            </div>
+          </div>
+          <div class="script-config">
+            <div class="form-group" style="margin:0">
+              <label>供应商</label>
+              <select id="scriptProviderSel"><option value="">— 请选择 —</option></select>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label>API名称</label>
+              <select id="scriptConfigSel"><option value="">— 请选择 —</option></select>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label>模型</label>
+              <select id="scriptModelSel"><option value="">— 请选择 —</option></select>
+            </div>
+          </div>
+          <div id="scriptEditorContainer" class="script-editor-container"></div>
+          <div class="script-actions">
+            <button class="btn btn-primary"   id="scriptRunBtn">▶ 运行</button>
+            <button class="btn btn-secondary" id="scriptStopBtn" style="display:none">■ 停止</button>
+            <button class="btn btn-secondary" id="scriptLintBtn">语法检查</button>
+            <button class="btn btn-secondary" id="scriptClearBtn">🗑 清空输出</button>
+            <span id="scriptTimer" style="font-size:.8rem;color:var(--text-muted)"></span>
+          </div>
+        </div>
+        <div class="script-right">
+          <div class="script-out-tabs">
+            <button class="script-out-tab active" data-out="log">运行日志</button>
+            <button class="script-out-tab" data-out="files">
+              结果文件
+              <span id="scriptFileBadge" class="script-file-badge" style="display:none"></span>
+            </button>
+          </div>
+          <div class="script-out-panel active" id="scriptOutLog">
+            <div class="script-log" id="scriptLog">
+              <span style="color:var(--text-muted);font-size:.82rem">运行后输出将显示在这里</span>
+            </div>
+          </div>
+          <div class="script-out-panel" id="scriptOutFiles">
+            <div id="scriptResultFiles" style="flex:1;overflow-y:auto">
+              <p style="color:var(--text-muted);font-size:.82rem;padding:16px">暂无结果文件</p>
+            </div>
+            <div id="scriptDownloadAll" style="display:none;padding:8px 12px;border-top:1px solid var(--border)">
+              <button class="btn btn-primary" id="scriptDlAllBtn" style="font-size:.82rem">
+                ↓ 打包下载全部
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Step 3: 配置任务 -->
-    <div class="step-panel" id="step-3">
-      <div class="card">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
-          <div class="form-group" style="margin:0">
-            <label>任务名称</label>
-            <input id="taskName" placeholder="如：产品评论分析">
+    <!-- Tab 4: 处理历史 -->
+    <div class="tab-panel" id="tab-history">
+      <div id="historyListView">
+        <div class="card" style="padding:0;overflow:hidden">
+          <div style="padding:8px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:flex-end;align-items:center;gap:8px">
+            <span id="historyAutoHint" style="font-size:.78rem;color:var(--text-muted)"></span>
+            <button class="btn btn-secondary" id="refreshHistoryBtn" style="padding:4px 12px">刷新</button>
           </div>
-          <div class="form-group" style="margin:0">
-            <label>输出 Label</label>
-            <input id="taskLabel" placeholder="如：sentiment_v1">
+          <div class="table-wrap" style="max-height:560px;overflow:auto">
+            <table id="historyTable">
+              <thead>
+                <tr>
+                  <th class="sortable" data-sort="batch_id">任务ID<span class="sort-ind">↕</span></th>
+                  <th class="sortable" data-sort="task_name">任务名称<span class="sort-ind">↕</span></th>
+                  <th class="sortable" data-sort="source_type">来源<span class="sort-ind">↕</span></th>
+                  <th class="sortable" data-sort="model">模型<span class="sort-ind">↕</span></th>
+                  <th class="sortable" data-sort="status">状态<span class="sort-ind">↕</span></th>
+                  <th class="sortable" data-sort="progress" style="min-width:200px">进度<span class="sort-ind">↕</span></th>
+                  <th class="sortable" data-sort="created_at">创建时间<span class="sort-ind">↕</span></th>
+                  <th style="min-width:240px">操作</th>
+                </tr>
+                <tr class="filter-row">
+                  <th><input class="hd-filter" data-filter="batch_id" placeholder="过滤…"></th>
+                  <th><input class="hd-filter" data-filter="task_name" placeholder="过滤…"></th>
+                  <th>
+                    <select class="hd-filter" data-filter="source_type">
+                      <option value="">全部</option>
+                      <option value="script">脚本</option>
+                      <option value="click">点击配置</option>
+                    </select>
+                  </th>
+                  <th><input class="hd-filter" data-filter="model" placeholder="过滤…"></th>
+                  <th>
+                    <select class="hd-filter" data-filter="status">
+                      <option value="">全部</option>
+                      <option value="queued">排队中</option>
+                      <option value="running">运行中</option>
+                      <option value="paused">已暂停</option>
+                      <option value="completed">已完成</option>
+                      <option value="failed">失败</option>
+                      <option value="partial_failed">部分失败</option>
+                    </select>
+                  </th>
+                  <th></th>
+                  <th></th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="historyListBody">
+                <tr><td colspan="8" style="padding:20px;text-align:center;color:var(--text-muted)">加载中…</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
-          <div class="form-group" style="margin:0">
-            <label>供应商</label>
-            <select id="providerSelect"><option value="">— 请选择 —</option></select>
-          </div>
-          <div class="form-group" style="margin:0">
-            <label>API名称</label>
-            <select id="configSelect"><option value="">— 请选择 —</option></select>
-          </div>
-          <div class="form-group" style="margin:0">
-            <label>模型</label>
-            <select id="modelSelect"><option value="">— 请选择 —</option></select>
+      </div>
+      <div id="historyDetailView" style="display:none">
+        <div class="card" style="margin-bottom:16px;padding:8px 16px">
+          <div style="display:flex;justify-content:flex-end;gap:8px">
+            <button class="btn btn-secondary" id="hdBackBtn">返回列表</button>
+            <button class="btn btn-primary" id="hdExportBtn">下载结果</button>
           </div>
         </div>
-        <div class="form-group" style="margin-top:16px">
-          <label>Prompt 模板</label>
-          <textarea id="promptTemplate" rows="4"
-            placeholder="使用 {字段名} 引用字段，例如：&#10;请分析以下评论的情感倾向：{评论内容}&#10;产品名称：{产品名}"></textarea>
-          <div class="template-help" id="templateHelp">
-            可用字段：<span id="availableFields">—</span>
+        <div class="card" style="padding:0;overflow:hidden">
+          <div style="padding:10px 14px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input id="hdSearchInput" placeholder="搜索输入/输出内容…"
+                   style="flex:1;min-width:200px;padding:4px 10px;font-size:.82rem">
+            <span style="font-size:.78rem;color:var(--text-muted)" id="hdRowCount"></span>
           </div>
-        </div>
-        <div style="margin-top:16px;display:flex;gap:10px">
-          <button class="btn btn-secondary" id="prevStep3">← 上一步</button>
-          <button class="btn btn-primary"   id="nextStep3">开始批跑 →</button>
+          <div class="table-wrap">
+            <table id="hdTable">
+              <thead id="hdHead"></thead>
+              <tbody id="hdBody"></tbody>
+            </table>
+          </div>
+          <div id="hdPagination" style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;font-size:.82rem;background:#fafafa">
+            <span id="hdLoadMoreHint" style="color:var(--text-muted)"></span>
+            <span style="flex:1"></span>
+            <button class="btn btn-secondary" id="hdPageFirst" style="padding:3px 10px;font-size:.78rem">«</button>
+            <button class="btn btn-secondary" id="hdPagePrev"  style="padding:3px 10px;font-size:.78rem">‹</button>
+            <span id="hdPageInfo" style="color:var(--text-muted);min-width:96px;text-align:center">第 1 / 1 页</span>
+            <button class="btn btn-secondary" id="hdPageNext"  style="padding:3px 10px;font-size:.78rem">›</button>
+            <button class="btn btn-secondary" id="hdPageLast"  style="padding:3px 10px;font-size:.78rem">»</button>
+            <span style="color:var(--text-muted);margin-left:6px">每页显示</span>
+            <select id="hdPageSize" style="padding:3px 4px;font-size:.82rem;width:56px">
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+            <span style="color:var(--text-muted)">行</span>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Step 4: 批跑 & 结果 -->
-    <div class="step-panel" id="step-4">
-      <div class="card" style="margin-bottom:16px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <span style="font-size:.9rem;font-weight:500" id="progressText">准备中…</span>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-secondary" id="stopBtn" style="display:none">停止</button>
-            <button class="btn btn-primary"   id="exportBtn" style="display:none">导出 CSV</button>
-          </div>
-        </div>
-        <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
-        <div style="font-size:.82rem;color:var(--text-muted)" id="progressDetail"></div>
-      </div>
-
-      <div class="card" style="padding:0;overflow:hidden">
-        <div class="table-wrap">
-          <table id="resultTable">
-            <thead id="resultHead"></thead>
-            <tbody id="resultBody"></tbody>
-          </table>
-        </div>
-      </div>
+    <!-- 图片大图 Modal -->
+    <div id="imgModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;align-items:center;justify-content:center;cursor:zoom-out">
+      <img id="imgModalImg" style="max-width:92vw;max-height:92vh;border-radius:8px">
     </div>
+
   </div>
 </div>
 
@@ -205,73 +478,285 @@ import { initSidebar } from '../assets/js/sidebar.js';
 import { requireLogin, getUser, refreshUser, authHeaders, logout } from '../assets/js/auth.js';
 if (!requireLogin()) throw new Error('redirect');
 initSidebar();
+await refreshUser();
 
-const user = await refreshUser();
-const isEmbed = document.documentElement.classList.contains('embed-mode');
-
-if (!isEmbed) {
-  document.getElementById('userBar').innerHTML = `
-    <span class="username">${user.username}${user.role==='admin'?'（管理员）':''}</span>
-    <button class="logout" id="logoutBtn">退出</button>`;
-  document.getElementById('logoutBtn').addEventListener('click', () => logout());
-  if (user.role === 'admin') { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; const k = document.getElementById('keysLink'); if(k) k.style.display='block'; }
+// ── Tab 切换 ─────────────────────────────────────────────
+let _navRestoring = false;   // restoreFromHash 期间为 true,避免回写 hash
+function updateHash(patch) {
+  if (_navRestoring) return;
+  const sp = new URLSearchParams(location.hash.slice(1));
+  for (const [k, v] of Object.entries(patch)) {
+    if (v == null || v === '') sp.delete(k);
+    else sp.set(k, v);
+  }
+  const s = sp.toString();
+  const newHash = s ? ('#' + s) : '';
+  if (location.hash !== newHash) {
+    history.replaceState(null, '', location.pathname + location.search + newHash);
+  }
+  // 作为 iframe 嵌入时,通知父页持久化(用于跨刷新恢复 iframe 内部状态)
+  if (window.parent !== window) {
+    try { window.parent.postMessage({ type: 'batch-hash', hash: newHash }, '*'); } catch {}
+  }
 }
 
-// ── ClickHouse 状态检查 ───────────────────────────────────
-fetch('http://localhost:8000/clickhouse/status', { headers: authHeaders() })
-  .then(r => r.json())
-  .then(d => {
-    document.getElementById('chDot').className = `ch-dot ${d.connected ? 'ok' : 'err'}`;
-    document.getElementById('chText').textContent = d.connected ? 'ClickHouse 已连接' : 'ClickHouse 未连接';
-    if (!d.connected && d.error) {
-      document.getElementById('chDetail').textContent = d.error;
-    } else {
-      document.getElementById('chStatus').removeAttribute('open');
+// ── 历史回填模式：仅由"任务列表→配置按钮"激活；任何 Tab 切换或 ESC 都会清空 ──
+let _inHistoricalView = false;
+let _loadingFromHistory = false;
+
+function exitHistoricalView() {
+  if (!_inHistoricalView) return;
+  // 清前端配置
+  try {
+    resetClickConfigForm();
+    const ps = document.getElementById('providerSelect');
+    if (ps) { ps.value = ''; ps.dispatchEvent(new Event('change')); }
+    const cs = document.getElementById('configSelect');
+    if (cs) cs.value = '';
+    const ms = document.getElementById('modelSelect');
+    if (ms) ms.value = '';
+  } catch {}
+  // 清脚本配置
+  try {
+    window._resetScriptEditor?.();
+    const sps = document.getElementById('scriptProviderSel');
+    if (sps) { sps.value = ''; sps.dispatchEvent(new Event('change')); }
+    const scs = document.getElementById('scriptConfigSel');
+    if (scs) scs.value = '';
+    const sms = document.getElementById('scriptModelSel');
+    if (sms) sms.value = '';
+    window._uploadedFileId = null;
+    const sfDrop = document.getElementById('scriptFileDrop');
+    const sfInfo = document.getElementById('scriptFileInfo');
+    if (sfDrop) sfDrop.style.display = '';
+    if (sfInfo) sfInfo.style.display = 'none';
+    window._clearScriptOutput?.();
+  } catch {}
+  _inHistoricalView = false;
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (_inHistoricalView && !_loadingFromHistory) exitHistoricalView();
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'history') loadHistory();
+    updateHash({ tab: btn.dataset.tab, detail: null });
+  });
+});
+
+// ESC：处于历史回填模式时返回任务列表（tab 点击会触发 exitHistoricalView 清空）
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !_inHistoricalView) return;
+  // 焦点在输入框/编辑器时跳过，避免打断用户输入
+  const t = e.target;
+  const tag = (t?.tagName || '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
+  document.querySelector('.tab-btn[data-tab="history"]')?.click();
+});
+
+// ── 点击配置：当前表单 → config_json ────────────────────
+function defaultTaskName() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_NA`;
+}
+function clickConfigJson() {
+  return {
+    input_file: window._currentInputFile || '',
+    selected_fields: selectedFields,
+    prompt_template: document.getElementById('promptTemplate')?.value || '',
+    provider: document.getElementById('providerSelect')?.value || '',
+    request_id: parseInt(document.getElementById('configSelect')?.value || 0) || null,
+    config_label: document.getElementById('configSelect')?.selectedOptions[0]?.text || '',
+    model: document.getElementById('modelSelect')?.value || '',
+  };
+}
+
+// 重置点击配置 Tab 到默认状态
+function resetClickConfigForm() {
+  rows = []; headers = []; selectedFields = [];
+  window._currentInputFile = '';
+  document.getElementById('taskName').value = '';
+  document.getElementById('fileInfo').textContent = '';
+  document.getElementById('previewTable').innerHTML = '';
+  document.getElementById('fieldList').innerHTML = '';
+  document.getElementById('availableFields').textContent = '—';
+  document.getElementById('promptTemplate').value = '';
+  const fi = document.getElementById('fileInput'); if (fi) fi.value = '';
+  updateStartBtn();
+}
+
+// 用历史 job 的 config_json 回填点击配置 Tab
+async function loadConfigIntoClickForm(cfg, taskName) {
+  resetClickConfigForm();
+  document.getElementById('taskName').value = taskName || '';
+  document.getElementById('promptTemplate').value = cfg.prompt_template || '';
+  selectedFields = cfg.selected_fields || [];
+  window._currentInputFile = cfg.input_file || '';
+  document.getElementById('availableFields').innerHTML =
+    selectedFields.length ? selectedFields.map(f => `<code>{${f}}</code>`).join(' ') : '—';
+  const list = document.getElementById('fieldList');
+  list.innerHTML = '';
+  selectedFields.forEach(h => {
+    const chip = document.createElement('div');
+    chip.className = 'field-chip selected'; chip.textContent = h;
+    chip.addEventListener('click', () => {
+      chip.classList.toggle('selected');
+      selectedFields = [...document.querySelectorAll('.field-chip.selected')].map(c => c.textContent);
+      document.getElementById('availableFields').innerHTML =
+        selectedFields.length ? selectedFields.map(f => `<code>{${f}}</code>`).join(' ') : '—';
+      updateStartBtn();
+    });
+    list.appendChild(chip);
+  });
+  // 等配置 API 列表加载完成,再回填供应商/API名称/模型,避免下拉为空导致填不上
+  if (!_batchConfigs.length) await loadConfigs();
+  if (cfg.provider) {
+    const ps = document.getElementById('providerSelect');
+    ps.value = cfg.provider; ps.dispatchEvent(new Event('change'));
+  }
+  if (cfg.request_id) {
+    const cs = document.getElementById('configSelect');
+    cs.value = String(cfg.request_id); cs.dispatchEvent(new Event('change'));
+    if (cfg.model) document.getElementById('modelSelect').value = cfg.model;
+  }
+}
+
+// 用历史 job 的 script_code 回填脚本 Tab
+async function loadScriptIntoEditor(scriptCode, taskName, cfg = {}, jobId = null) {
+  document.getElementById('scriptTaskName').value = taskName || '';
+  document.getElementById('scriptTaskIdPreview').value = jobId ? String(jobId) : '';
+  if (window.monacoEditor) {
+    monacoEditor.setValue(scriptCode || '');
+  } else {
+    window._pendingScriptCode = scriptCode || '';
+  }
+  // 用历史 cfg 回填 供应商 / 配置 / 模型 / 文件
+  if (cfg && (cfg.provider || cfg.input_file)) {
+    if (window._loadScriptConfigs && !window._getScriptConfigs?.()?.length) {
+      await window._loadScriptConfigs();
     }
-  }).catch(() => {
-    document.getElementById('chText').textContent = 'ClickHouse 状态未知';
-  });
-
-// ── 步骤控制 ──────────────────────────────────────────────
-let currentStep = 1;
-function goStep(n) {
-  document.querySelectorAll('.step-btn').forEach(b => {
-    const s = parseInt(b.dataset.step);
-    b.classList.toggle('active', s === n);
-    b.classList.toggle('done', s < n);
-  });
-  document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
-  document.getElementById('step-' + n).classList.add('active');
-  currentStep = n;
+    if (cfg.provider) {
+      const pSel = document.getElementById('scriptProviderSel');
+      pSel.value = cfg.provider;
+      pSel.dispatchEvent(new Event('change'));   // 同步填充 configSel
+      if (cfg.request_id) {
+        const cSel = document.getElementById('scriptConfigSel');
+        cSel.value = String(cfg.request_id);
+        cSel.dispatchEvent(new Event('change')); // 同步填充 modelSel
+        if (cfg.model) document.getElementById('scriptModelSel').value = cfg.model;
+      }
+    }
+    if (cfg.input_file) {
+      window._uploadedFileId = cfg.input_file;
+      document.getElementById('scriptFileDrop').style.display = 'none';
+      const fi = document.getElementById('scriptFileInfo');
+      fi.style.display = 'flex';
+      document.getElementById('scriptFileName').textContent = cfg.input_file.split('/').pop();
+      const st = document.getElementById('scriptFileStats');
+      st.textContent = '(沿用历史文件)'; st.style.color = '';
+    }
+  }
+  // 默认调出运行日志(从历史拉)
+  if (jobId) await loadHistoricalRunLog(jobId);
 }
 
-// ── 数据状态 ──────────────────────────────────────────────
-let rows = [];        // 原始数据行 [{col:val, ...}]
-let headers = [];     // 所有字段名
+// 拉取历史任务的运行日志,渲染到脚本 Tab 的"运行日志"面板
+async function loadHistoricalRunLog(jobId) {
+  try {
+    const res = await fetch(`http://localhost:8000/batch2/jobs/${jobId}/rows`, { headers: authHeaders() });
+    if (!res.ok) return;
+    const rows = await res.json();
+    window._clearScriptOutput?.();
+    // 切到"运行日志" Tab
+    document.querySelector('.script-out-tab[data-out="log"]')?.click();
+    window._appendScriptLog?.('info', `📜 历史运行日志 · 任务 #${jobId} · 共 ${rows.length} 行\n\n`);
+    if (!rows.length) {
+      window._appendScriptLog?.('info', '(该任务暂无行级日志)\n');
+      return;
+    }
+    rows.forEach(r => {
+      const idx = r.row_index;
+      const ts = r.finished_at ? ` [${r.finished_at}]` : '';
+      if (r.success) {
+        const out = (r.output_text || '').toString();
+        window._appendScriptLog?.('stdout', `[行 ${idx}] ✓${ts} ${out}\n`);
+      } else {
+        window._appendScriptLog?.('error',  `[行 ${idx}] ✗${ts} ${r.error_msg || '(无错误信息)'}\n`);
+      }
+    });
+  } catch(e) {
+    window._appendScriptLog?.('error', '加载历史日志失败:' + e.message + '\n');
+  }
+}
+// ── 数据状态 ─────────────────────────────────────────────
+let rows = [];
+let headers = [];
 let selectedFields = [];
-let results = [];     // 处理结果
+let results = [];
 let running = false;
 let stopFlag = false;
-let currentTaskId = null;
+let _postProcessor = null;
 
-// ── Step 1: 文件上传 ──────────────────────────────────────
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ── 上传前确认弹窗(每次打开本模块,第一次点击文件上传时拦截一次) ─────
+window._uploadConfirmed = false;
+let _pendingUploadAction = null;
+window.gateUpload = function (action) {
+  if (window._uploadConfirmed) { action(); return; }
+  _pendingUploadAction = action;
+  document.getElementById('uploadConfirmModal').classList.add('open');
+};
+document.getElementById('uploadConfirmOk').addEventListener('click', () => {
+  window._uploadConfirmed = true;
+  document.getElementById('uploadConfirmModal').classList.remove('open');
+  const cb = _pendingUploadAction; _pendingUploadAction = null;
+  if (cb) cb();
+});
+// 前端配置:拦截 #fileInput 的 click 事件(默认行为是打开文件选择框)
+document.getElementById('fileInput').addEventListener('click', e => {
+  if (window._uploadConfirmed) return;
+  e.preventDefault();
+  window.gateUpload(() => document.getElementById('fileInput').click());
+});
+
+// ── 文件上传 ─────────────────────────────────────────────
 document.getElementById('fileInput').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const ext = file.name.split('.').pop().toLowerCase();
   try {
-    if (ext === 'csv')         rows = await parseCsv(file);
-    else if (ext === 'json')   rows = await parseJson(file);
+    if (ext === 'csv') rows = await parseCsv(file);
+    else if (ext === 'json') rows = await parseJson(file);
     else if (['xlsx','xls'].includes(ext)) rows = await parseExcel(file);
     else { alert('不支持的文件格式'); return; }
-
     headers = rows.length ? Object.keys(rows[0]) : [];
     document.getElementById('fileInfo').textContent =
-      `✅ 已解析 ${rows.length} 行，${headers.length} 列：${headers.join('、')}`;
+      `已解析 ${rows.length} 行，${headers.length} 列：${headers.join('、')}`;
     renderPreview();
-    document.getElementById('nextStep1').disabled = rows.length === 0;
+    renderFieldSelector();
+    updateStartBtn();
+
+    // 同时上传到服务器,获得服务器路径供脚本使用
+    try {
+      const form = new FormData(); form.append('file', file);
+      const tk = localStorage.getItem('platform_token') || '';
+      const res = await fetch('http://localhost:8000/script/upload', {
+        method:'POST', headers:{'X-Token':tk}, body: form,
+      });
+      if (res.ok) {
+        const d = await res.json();
+        window._currentInputFile = d.file_id;
+      }
+    } catch {}
   } catch(e) {
-    document.getElementById('fileInfo').textContent = `❌ 解析失败：${e.message}`;
+    document.getElementById('fileInfo').textContent = `解析失败：${e.message}`;
   }
 });
 
@@ -324,19 +809,13 @@ function parseExcel(file) {
 
 function renderPreview() {
   const preview = rows.slice(0, 5);
-  const table = document.getElementById('previewTable');
-  table.innerHTML = `<table>
+  document.getElementById('previewTable').innerHTML = `<table>
     <thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
     <tbody>${preview.map(r=>`<tr>${headers.map(h=>`<td>${r[h]??''}</td>`).join('')}</tr>`).join('')}</tbody>
   </table><p style="font-size:.78rem;color:var(--text-muted);margin-top:6px">预览前5行，共${rows.length}行</p>`;
 }
 
-document.getElementById('nextStep1').addEventListener('click', () => {
-  renderFieldSelector();
-  goStep(2);
-});
-
-// ── Step 2: 选择字段 ──────────────────────────────────────
+// ── 字段选择 ─────────────────────────────────────────────
 function renderFieldSelector() {
   const list = document.getElementById('fieldList');
   list.innerHTML = '';
@@ -348,249 +827,1493 @@ function renderFieldSelector() {
     chip.addEventListener('click', () => {
       chip.classList.toggle('selected');
       selectedFields = [...document.querySelectorAll('.field-chip.selected')].map(c => c.textContent);
-      document.getElementById('nextStep2').disabled = selectedFields.length === 0;
+      document.getElementById('availableFields').innerHTML =
+        selectedFields.length ? selectedFields.map(f => `<code>{${f}}</code>`).join(' ') : '—';
+      updateStartBtn();
     });
     list.appendChild(chip);
   });
 }
 
-document.getElementById('prevStep2').addEventListener('click', () => goStep(1));
-document.getElementById('nextStep2').addEventListener('click', () => {
-  document.getElementById('availableFields').innerHTML =
-    selectedFields.map(f => `<code>{${f}}</code>`).join(' ');
-  loadConfigs();
-  goStep(3);
-});
+function updateStartBtn() {
+  document.getElementById('startBatchBtn').disabled = !(rows.length && selectedFields.length);
+}
 
-// ── Step 3: 配置任务 ──────────────────────────────────────
+// ── 任务配置：加载 API 列表 ──────────────────────────────
 let _batchConfigs = [];
 
 async function loadConfigs() {
-  const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
-  _batchConfigs = await res.json().catch(() => []);
+  try {
+    const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
+    _batchConfigs = await res.json().catch(() => []);
+  } catch { _batchConfigs = []; }
   const providers = [...new Set(_batchConfigs.map(c => c.provider))];
-  const pSel = document.getElementById('providerSelect');
-  pSel.innerHTML = '<option value="">— 请选择 —</option>' +
+  document.getElementById('providerSelect').innerHTML = '<option value="">— 请选择 —</option>' +
     providers.map(p => `<option value="${p}">${p}</option>`).join('');
   document.getElementById('configSelect').innerHTML = '<option value="">— 请选择 —</option>';
-  document.getElementById('modelSelect').innerHTML  = '<option value="">— 请选择 —</option>';
+  document.getElementById('modelSelect').innerHTML = '<option value="">— 请选择 —</option>';
 }
+loadConfigs();
 
 document.getElementById('providerSelect').addEventListener('change', e => {
   const filtered = _batchConfigs.filter(c => c.provider === e.target.value);
-  const cSel = document.getElementById('configSelect');
-  cSel.innerHTML = filtered.length
-    ? '<option value="">— 请选择 —</option>' + filtered.map(c => `<option value="${c.id}">${c.name}</option>`).join('')
+  document.getElementById('configSelect').innerHTML = filtered.length
+    ? '<option value="">— 请选择 —</option>' + filtered.map(c =>
+        `<option value="${c.request_id}">${c.api_name || c.sub_account_name || c.project_name || c.request_id}</option>`
+      ).join('')
     : '<option value="">— 暂无可用 —</option>';
   document.getElementById('modelSelect').innerHTML = '<option value="">— 请选择 —</option>';
 });
 
-document.getElementById('configSelect').addEventListener('change', e => loadModels(e.target.value));
+document.getElementById('configSelect').addEventListener('change', e => {
+  const entry = _batchConfigs.find(c => String(c.request_id) === String(e.target.value));
+  const models = entry?.available_models
+    ? entry.available_models.split(',').map(m => m.trim()).filter(Boolean) : [];
+  document.getElementById('modelSelect').innerHTML = models.length
+    ? models.map(m => `<option value="${m}">${m}</option>`).join('')
+    : '<option value="">— 该申请无可用模型 —</option>';
+});
 
-async function loadModels(configId) {
-  if (!configId) return;
-  const res = await fetch(`http://localhost:8000/configs/${configId}/models`);
-  const data = await res.json().catch(() => ({ models: [] }));
-  const sel = document.getElementById('modelSelect');
-  sel.innerHTML = data.models.length
-    ? data.models.map(m => `<option value="${m}">${m}</option>`).join('')
-    : '<option value="">— 该配置无可用模型 —</option>';
-}
-
-document.getElementById('prevStep3').addEventListener('click', () => goStep(2));
-document.getElementById('nextStep3').addEventListener('click', startBatch);
-
-// ── Step 4: 批跑 ──────────────────────────────────────────
-async function startBatch() {
-  const taskName = document.getElementById('taskName').value.trim() || '批跑任务';
-  const label    = document.getElementById('taskLabel').value.trim();
-  const template = document.getElementById('promptTemplate').value.trim();
-  const system   = '';
-  const configId = document.getElementById('configSelect').value;
-  const model    = document.getElementById('modelSelect').value;
-
-  if (!template) { alert('请填写 Prompt 模板'); return; }
-  if (!configId) { alert('请选择 API 配置'); return; }
-  if (!model)    { alert('请选择模型'); return; }
-
-  // 创建批跑任务
-  const startRes = await fetch('http://localhost:8000/batch/start', {
-    method: 'POST', headers: authHeaders(),
-    body: JSON.stringify({
-      task_name: taskName, label, row_count: rows.length,
-      config_id: parseInt(configId),
-      config_name: document.getElementById('configSelect').selectedOptions[0]?.text || '',
-      model,
-    }),
-  });
-  if (!startRes.ok) { alert('创建任务失败，请检查 ClickHouse 连接'); return; }
-  const { task_id } = await startRes.json();
-  currentTaskId = task_id;
-
-  goStep(4);
-  running = true; stopFlag = false;
-  results = [];
-
-  // ── 先将所有输入数据写入 ClickHouse ──
-  document.getElementById('progressText').textContent = '写入输入数据到 ClickHouse…';
-  document.getElementById('progressDetail').textContent = `共 ${rows.length} 行`;
+// ── 批跑 ─────────────────────────────────────────────────
+document.getElementById('startBatchBtn').addEventListener('click', startBatch);
+let _currentRunJobId = null;
+document.getElementById('stopBtn').addEventListener('click', async () => {
+  if (!_currentRunJobId) return;
+  if (!confirm('确定暂停当前运行？已完成的行会保留,续跑时跳过。')) return;
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('stopBtn').textContent = '暂停中…';
   try {
-    const inputPayload = rows.map((row, i) => ({
-      row_index: i,
-      input_json: JSON.stringify(row),
-    }));
-    // 分批写入（每批最多200行）
-    const BATCH = 200;
-    for (let b = 0; b < inputPayload.length; b += BATCH) {
-      const chunk = inputPayload.slice(b, b + BATCH);
-      const res = await fetch('http://localhost:8000/batch/inputs', {
-        method: 'POST', headers: authHeaders(),
-        body: JSON.stringify({ task_id, rows: chunk }),
-      });
-      if (!res.ok) throw new Error('写入失败');
-      const pct = Math.min(Math.round((b + chunk.length) / rows.length * 100), 100);
-      document.getElementById('progressBar').style.width = pct + '%';
-    }
-    document.getElementById('progressDetail').textContent = `✅ 输入数据已写入 ClickHouse，开始调用 API…`;
-  } catch(e) {
-    alert('输入数据写入 ClickHouse 失败：' + e.message);
-    running = false; return;
-  }
+    await fetch(`http://localhost:8000/batch2/jobs/${_currentRunJobId}/pause`,
+      { method:'POST', headers: authHeaders() });
+  } catch {}
+});
 
-  // 构建结果表头
+function _clearClickFormValidation() {
+  document.querySelectorAll('#tab-click-config .field-invalid')
+    .forEach(e => e.classList.remove('field-invalid'));
+}
+function _flagFieldInvalid(elemId, sectionText) {
+  if (elemId) {
+    const el = document.getElementById(elemId);
+    if (el) {
+      el.classList.add('field-invalid');
+      const grp = el.closest('.form-group');
+      const lbl = grp?.querySelector('label');
+      if (lbl) lbl.classList.add('field-invalid');
+    }
+  }
+  if (sectionText) {
+    document.querySelectorAll('#tab-click-config .section-title').forEach(t => {
+      if (t.textContent.trim() === sectionText) t.classList.add('field-invalid');
+    });
+  }
+}
+// 任意输入恢复时移除红色提示
+['promptTemplate','configSelect','modelSelect','taskName','fileInput'].forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const clear = () => {
+    el.classList.remove('field-invalid');
+    const grp = el.closest('.form-group');
+    grp?.querySelectorAll('label.field-invalid').forEach(x => x.classList.remove('field-invalid'));
+    if (id === 'fileInput') {
+      document.querySelectorAll('#tab-click-config .section-title.field-invalid')
+        .forEach(t => { if (t.textContent.trim() === '上传文件') t.classList.remove('field-invalid'); });
+    }
+    if (id === 'taskName') {
+      document.querySelectorAll('#tab-click-config .section-title.field-invalid')
+        .forEach(t => { if (t.textContent.trim() === '任务名称') t.classList.remove('field-invalid'); });
+    }
+  };
+  el.addEventListener('input', clear);
+  el.addEventListener('change', clear);
+});
+
+async function startBatch() {
+  _clearClickFormValidation();
+  const template  = document.getElementById('promptTemplate').value.trim();
+  const requestId = document.getElementById('configSelect').value;
+  const model     = document.getElementById('modelSelect').value;
+  const hasFile   = !!window._currentInputFile;
+  let invalid = false;
+  if (!template)  { _flagFieldInvalid('promptTemplate'); invalid = true; }
+  if (!requestId) { _flagFieldInvalid('configSelect');   invalid = true; }
+  if (!model)     { _flagFieldInvalid('modelSelect');    invalid = true; }
+  if (!hasFile)   { _flagFieldInvalid(null, '上传文件'); invalid = true; }
+  if (invalid) return;
+
+  document.getElementById('batchProgressCard').style.display = '';
+  running = true; stopFlag = false; results = [];
+
   const resultCols = [...selectedFields, 'AI 结果', '状态'];
   document.getElementById('resultHead').innerHTML =
     `<tr><th>#</th>${resultCols.map(c=>`<th>${c}</th>`).join('')}</tr>`;
   document.getElementById('resultBody').innerHTML = '';
   document.getElementById('stopBtn').style.display = 'inline-flex';
+  document.getElementById('stopBtn').disabled = false;
+  document.getElementById('stopBtn').textContent = '暂停';
   document.getElementById('exportBtn').style.display = 'none';
+  document.getElementById('startBatchBtn').disabled = true;
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('progressText').textContent = '运行中…';
+  document.getElementById('progressDetail').textContent = '';
+  _currentRunJobId = null;
+  // 切到"运行日志" Tab 并清空旧日志
+  document.querySelector('.click-out-tab[data-cout="log"]')?.click();
+  clearBatchLog();
+  appendBatchLog('info', '▶ 开始批跑…\n');
 
-  let done = 0, errors = 0;
-
-  for (let i = 0; i < rows.length; i++) {
-    if (stopFlag) break;
-    const row = rows[i];
-
-    // 构造 prompt
-    let prompt = template;
-    selectedFields.forEach(f => {
-      prompt = prompt.replaceAll(`{${f}}`, row[f] ?? '');
-    });
-
-    // 添加到结果表（进行中状态）
-    const tr = document.createElement('tr');
-    tr.id = `result-row-${i}`;
-    tr.innerHTML = `<td>${i+1}</td>` +
-      selectedFields.map(f => `<td style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${row[f]??''}</td>`).join('') +
-      `<td id="result-text-${i}" style="max-width:300px">—</td>` +
-      `<td><span class="result-status-ing">⏳ 处理中</span></td>`;
-    document.getElementById('resultBody').appendChild(tr);
-    document.getElementById('resultBody').scrollTop = document.getElementById('resultBody').scrollHeight;
-
-    let outputText = '';
-    let success = 1;
-    let errorMsg = '';
-
-    try {
-      const resp = await fetch('http://localhost:8000/chat', {
-        method: 'POST', headers: authHeaders(),
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: prompt }],
-          model, system, config_id: parseInt(configId),
-        }),
-      });
-      // 读取 SSE 流
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done: d, value } = await reader.read();
-        if (d) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n'); buf = lines.pop();
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const raw = line.slice(6).trim();
-          if (raw === '[DONE]') break;
-          try {
-            const msg = JSON.parse(raw);
-            if (msg.text) {
-              outputText += msg.text;
-              document.getElementById(`result-text-${i}`).textContent = outputText.slice(0,200) + (outputText.length>200?'…':'');
-            }
-            if (msg.error) { success = 0; errorMsg = msg.error; }
-          } catch {}
-        }
+  // 任务名为空时,发送空字符串 —— 后端会用 batch_id 兜底,符合"同任务ID命名规则"
+  const taskName = document.getElementById('taskName').value.trim();
+  let _ranOk = false;
+  try {
+    await runBatchWithStreaming({
+    source_type: 'click',
+    task_name: taskName,
+    config_json: JSON.stringify(clickConfigJson()),
+    request_id: parseInt(requestId),
+    model,
+  }, (ev, ctx) => {
+    if (ev.type === 'task_started') {
+      _currentRunJobId = ev.job_id;
+      appendBatchLog('info', `任务已创建 (job_id=${ev.job_id})\n`);
+    } else if (ev.type === 'row') {
+      const tr = document.createElement('tr');
+      const fields = ctx.fields;
+      tr.innerHTML = `<td>${ev.idx+1}</td>` +
+        fields.map(f => `<td style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(ev.input?.[f] ?? ''))}</td>`).join('') +
+        `<td style="max-width:300px">${escapeHtml(String(ev.output).slice(0,200))}${String(ev.output).length>200?'…':''}</td>` +
+        `<td>${ev.success ? '<span class="result-status-ok">完成</span>' : `<span class="result-status-err" title="${escapeHtml(ev.error||'')}">失败</span>`}</td>`;
+      document.getElementById('resultBody').appendChild(tr);
+      results.push({ ...ev.input, 'AI结果': ev.output, '状态': ev.success?'完成':'失败' });
+      ctx.done = (ctx.done||0) + (ev.success?1:0);
+      ctx.fail = (ctx.fail||0) + (ev.success?0:1);
+      const total = ctx.total || 0;
+      const processed = ctx.done + ctx.fail;
+      const pct = total > 0 ? Math.round(processed/total*100) : 0;
+      document.getElementById('progressBar').style.width = pct + '%';
+      document.getElementById('progressText').textContent = `进度：${processed}${total?' / '+total:''}`;
+      document.getElementById('progressDetail').textContent = `完成 ${ctx.done}　失败 ${ctx.fail}`;
+      // 同步到右侧日志
+      if (ev.success) {
+        const preview = String(ev.output ?? '').replace(/\s+/g, ' ').slice(0, 120);
+        appendBatchLog('stdout', `[行 ${ev.idx+1}] ✓ ${preview}\n`);
+      } else {
+        appendBatchLog('error', `[行 ${ev.idx+1}] ✗ ${ev.error || '(无错误信息)'}\n`);
       }
-      done++;
-    } catch(e) {
-      success = 0; errorMsg = e.message; errors++;
+    } else if (ev.type === 'stdout') {
+      if (/已加载 (\d+) 行/.test(ev.text || '')) ctx.total = parseInt(RegExp.$1);
+      appendBatchLog('stdout', ev.text || '');
+    } else if (ev.type === 'stderr') {
+      appendBatchLog('stderr', ev.text || '');
+    } else if (ev.type === 'error') {
+      appendBatchLog('error', ev.text || '');
     }
-
-    // 更新行状态
-    const lastTd = tr.querySelectorAll('td');
-    lastTd[lastTd.length-1].innerHTML = success
-      ? '<span class="result-status-ok">✅ 完成</span>'
-      : `<span class="result-status-err" title="${errorMsg}">❌ 失败</span>`;
-
-    // 写入 ClickHouse
-    fetch('http://localhost:8000/batch/row', {
-      method: 'POST', headers: authHeaders(),
-      body: JSON.stringify({
-        task_id, row_index: i,
-        input_json: JSON.stringify(row),
-        output_text: outputText,
-        output_type: 'text',
-        output_path: '',
-        label, model, success, error_msg: errorMsg,
-      }),
-    }).catch(() => {});
-
-    results.push({ ...row, 'AI结果': outputText, '状态': success ? '完成' : '失败' });
-
-    // 更新进度
-    const pct = Math.round((i+1)/rows.length*100);
-    document.getElementById('progressBar').style.width = pct + '%';
-    document.getElementById('progressText').textContent = `进度：${i+1} / ${rows.length}`;
-    document.getElementById('progressDetail').textContent =
-      `✅ 完成 ${done}　❌ 失败 ${errors}　⏳ 剩余 ${rows.length-i-1}`;
+  }, { fields: selectedFields });
+    _ranOk = true;
+  } catch (e) {
+    let msg = (e && e.message) || String(e);
+    try { const j = JSON.parse(msg); msg = j.detail || msg; } catch {}
+    appendBatchLog('error', `\n❌ 启动失败：${msg}\n`);
+    // 任务名重复 → 高亮任务名输入框
+    if (/已存在|已被使用|duplicate/i.test(msg)) {
+      _flagFieldInvalid('taskName', '任务名称');
+      document.getElementById('taskName')?.focus();
+    }
   }
 
-  // 完成
   running = false;
   document.getElementById('stopBtn').style.display = 'none';
-  document.getElementById('exportBtn').style.display = 'inline-flex';
-  document.getElementById('progressText').textContent =
-    stopFlag ? `已停止（处理了 ${results.length} 行）` : `批跑完成：共 ${results.length} 行`;
-
-  // 通知后端任务完成
-  if (currentTaskId) {
-    fetch(`http://localhost:8000/batch/finish/${currentTaskId}`, {
-      method: 'PUT', headers: authHeaders(),
-    }).catch(() => {});
+  document.getElementById('startBatchBtn').disabled = false;
+  if (_ranOk) {
+    document.getElementById('exportBtn').style.display = 'inline-flex';
+    document.getElementById('progressText').textContent = `批跑完成：共 ${results.length} 行`;
+    appendBatchLog('info', `\n✅ 批跑完成,共 ${results.length} 行\n`);
+    // 仅成功完成时清空表单
+    resetClickConfigForm();
+  } else {
+    // 启动失败/中途出错：隐藏进度卡片,但保留用户已填写的内容
+    document.getElementById('batchProgressCard').style.display = 'none';
+    document.getElementById('progressText').textContent = '准备中…';
   }
 }
 
-document.getElementById('stopBtn').addEventListener('click', () => {
-  stopFlag = true;
-  document.getElementById('stopBtn').disabled = true;
-  document.getElementById('stopBtn').textContent = '停止中…';
+// 右侧"运行日志"面板的写入助手
+function appendBatchLog(cls, text) {
+  const logEl = document.getElementById('batchLog');
+  if (!logEl) return;
+  const hint = logEl.querySelector('[style]');
+  if (hint && hint.tagName === 'SPAN') hint.remove();
+  const span = document.createElement('span');
+  span.className = `log-${cls}`; span.textContent = text;
+  logEl.appendChild(span); logEl.scrollTop = logEl.scrollHeight;
+}
+function clearBatchLog() {
+  const logEl = document.getElementById('batchLog');
+  if (logEl) logEl.innerHTML = '';
+}
+
+// 右侧 Tab 切换(运行日志 / 结果)
+document.querySelectorAll('.click-out-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.click-out-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.click-out-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    const which = tab.dataset.cout;
+    const panel = which === 'log' ? 'clickOutLog' : 'clickOutResult';
+    document.getElementById(panel)?.classList.add('active');
+  });
 });
 
-// ── 导出 CSV ──────────────────────────────────────────────
+// ── 公共：调用 /batch2/run 并接受流式事件 ────────────────
+async function runBatchWithStreaming(payload, onEvent, ctx = {}) {
+  const res = await fetch('http://localhost:8000/batch2/run', {
+    method:'POST', headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) { throw new Error(await res.text()); }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n'); buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      try { onEvent(JSON.parse(line.slice(6)), ctx); } catch {}
+    }
+  }
+}
+
+// 后台静默消费流（用于历史页的续跑/重跑,不阻塞 UI）
+async function consumeRunStream(res) {
+  try {
+    const reader = res.body.getReader();
+    while (true) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+  } catch {}
+}
+
+// ── 导出 ─────────────────────────────────────────────────
 document.getElementById('exportBtn').addEventListener('click', () => {
   if (!results.length) return;
   const keys = Object.keys(results[0]);
-  const csv = [
-    keys.join(','),
-    ...results.map(r => keys.map(k => `"${String(r[k]??'').replace(/"/g,'""')}"`).join(','))
-  ].join('\n');
+  const csv = [keys.join(','), ...results.map(r => keys.map(k => `"${String(r[k]??'').replace(/"/g,'""')}"`).join(','))].join('\n');
   const blob = new Blob(['﻿'+csv], { type: 'text/csv;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `批跑结果_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `批跑结果_${new Date().toISOString().slice(0,10)}.csv`; a.click();
 });
+
+async function autoSaveResults(format, path, taskName) {
+  const keys = Object.keys(results[0] || {});
+  let mime, text, binary, ext;
+  if (format === 'json') { mime='application/json'; text=JSON.stringify(results,null,2); binary=null; ext='json'; }
+  else if (format === 'xlsx') {
+    const ws = XLSX.utils.json_to_sheet(results);
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Results');
+    binary = XLSX.write(wb, { bookType:'xlsx', type:'array' }); mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'; text=''; ext='xlsx';
+  } else {
+    text = '﻿' + [keys.join(','), ...results.map(r => keys.map(k => `"${String(r[k]??'').replace(/"/g,'""')}"`).join(','))].join('\n');
+    mime='text/csv;charset=utf-8'; binary=null; ext='csv';
+  }
+  const stamp = new Date().toISOString().slice(0,16).replace(/[T:]/g,'-');
+  const baseName = `${(taskName||'批跑结果').replace(/[\\/:*?"<>|]/g,'_')}_${stamp}.${ext}`;
+  if (!path) {
+    const blob = binary ? new Blob([binary],{type:mime}) : new Blob([text],{type:mime});
+    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=baseName; a.click(); return;
+  }
+  const targetPath = path.endsWith('/')||path.endsWith('\\') ? path+baseName : `${path}/${baseName}`;
+  const body = binary
+    ? { path:targetPath, encoding:'base64', content: btoa(String.fromCharCode(...new Uint8Array(binary))) }
+    : { path:targetPath, encoding:'text', content:text };
+  const res = await fetch('http://localhost:8000/save-result', { method:'POST', headers:authHeaders(), body:JSON.stringify(body) });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// ── 处理历史 ─────────────────────────────────────────────
+let _historyExportRows = [];
+let _historyAutoTimer = null;
+let _historyCurrentDetailId = null;   // 详情页打开的 jobId
+let _historyAllRows = [];             // 详情页明细缓存,用于筛选/搜索
+
+const STATUS_LABEL = {
+  queued: '排队中', running: '运行中', completed: '已完成',
+  failed: '失败', partial_failed: '部分失败',
+};
+const STATUS_CLASS = {
+  queued: 'queued', running: 'running', completed: 'completed',
+  failed: 'failed', partial_failed: 'partial',
+};
+function statusBadge(s) {
+  const cls = STATUS_CLASS[s] || 'queued';
+  const lbl = STATUS_LABEL[s] || (s || '—');
+  return `<span class="status-badge ${cls}">${lbl}</span>`;
+}
+
+function fmtTime(t) {
+  if (!t) return '';
+  try { return new Date(t).toLocaleString('zh-CN', { hour12: false }); } catch { return String(t); }
+}
+
+function fmtDuration(startIso, endIso) {
+  if (!startIso || !endIso) return '—';
+  try {
+    const ms = new Date(endIso) - new Date(startIso);
+    if (ms < 1000) return ms + ' ms';
+    if (ms < 60000) return (ms/1000).toFixed(1) + ' s';
+    return Math.floor(ms/60000) + ' 分 ' + Math.floor((ms%60000)/1000) + ' 秒';
+  } catch { return '—'; }
+}
+
+// 缓存 + 排序/过滤状态(供 renderHistoryList 使用)
+let _historyList = [];
+let _historySort = { field: 'created_at', dir: 'desc' };
+let _historyFilters = {};
+
+async function loadHistory(silent = false) {
+  const body = document.getElementById('historyListBody');
+  if (!silent) {
+    body.innerHTML = '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--text-muted)">加载中…</td></tr>';
+  }
+  document.getElementById('historyListView').style.display = '';
+  document.getElementById('historyDetailView').style.display = 'none';
+  _historyCurrentDetailId = null;
+
+  try {
+    const res = await fetch('http://localhost:8000/batch2/jobs', { headers: authHeaders() });
+    if (!res.ok) throw new Error(await res.text());
+    _historyList = await res.json();
+    renderHistoryList();
+    const anyRunning = _historyList.some(t => t.status === 'running' || t.status === 'queued');
+    if (anyRunning) startHistoryAutoRefresh(); else stopHistoryAutoRefresh();
+  } catch(e) {
+    body.innerHTML = `<tr><td colspan="8" style="padding:20px;text-align:center;color:#dc2626">加载失败：${escapeHtml(e.message)}</td></tr>`;
+    stopHistoryAutoRefresh();
+  }
+}
+
+function renderHistoryList() {
+  const body = document.getElementById('historyListBody');
+  if (!_historyList.length) {
+    body.innerHTML = '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--text-muted)">暂无任务</td></tr>';
+    updateSortIndicators();
+    return;
+  }
+  // 取模型字段:优先用顶层 t.model,缺失则回退到 config_json.model
+  const getModel = t => t.model || (() => { try { return JSON.parse(t.config_json || '{}').model || ''; } catch { return ''; } })();
+  // 过滤
+  const filtered = _historyList.filter(t => {
+    for (const [f, v] of Object.entries(_historyFilters)) {
+      if (!v) continue;
+      if (f === 'source_type') {
+        const norm = (t.source_type === 'script') ? 'script' : 'click';
+        if (norm !== v) return false;
+      } else if (f === 'status') {
+        if ((t.status || '') !== v) return false;
+      } else if (f === 'model') {
+        if (!getModel(t).toLowerCase().includes(v.toLowerCase())) return false;
+      } else {
+        const cell = (t[f] || '').toString().toLowerCase();
+        if (!cell.includes(v.toLowerCase())) return false;
+      }
+    }
+    return true;
+  });
+  // 排序
+  const { field, dir } = _historySort;
+  const mult = dir === 'asc' ? 1 : -1;
+  const sorted = filtered.slice().sort((a, b) => {
+    let va, vb;
+    if (field === 'progress') {
+      va = (a.done_count || 0) + (a.fail_count || 0);
+      vb = (b.done_count || 0) + (b.fail_count || 0);
+    } else if (field === 'source_type') {
+      va = (a.source_type === 'script') ? 'script' : 'click';
+      vb = (b.source_type === 'script') ? 'script' : 'click';
+    } else if (field === 'model') {
+      va = getModel(a); vb = getModel(b);
+    } else {
+      va = a[field] ?? '';
+      vb = b[field] ?? '';
+    }
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * mult;
+    return String(va).localeCompare(String(vb), 'zh') * mult;
+  });
+
+  if (!sorted.length) {
+    body.innerHTML = '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--text-muted)">无匹配任务</td></tr>';
+    updateSortIndicators();
+    return;
+  }
+  const tk = encodeURIComponent(localStorage.getItem('platform_token') || '');
+  body.innerHTML = sorted.map(t => {
+    const total = t.row_count || 0;
+    const done  = t.done_count || 0;
+    const fail  = t.fail_count || 0;
+    const processed = done + fail;
+    const pct = total > 0 ? Math.round(processed/total*100) : (t.status === 'completed' ? 100 : 0);
+    const dlDisabled = (t.status === 'queued' || processed === 0) ? ' disabled' : '';
+    const isDone   = ['completed','failed','partial_failed'].includes(t.status);
+    const isRunning = t.status === 'running';
+    const isPaused  = t.status === 'paused';
+    const sourceLabel = t.source_type === 'script'
+      ? '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e0e7ff;color:#3730a3;font-size:.7rem">脚本</span>'
+      : '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:#dcfce7;color:#166534;font-size:.7rem">点击配置</span>';
+    const pauseBtn = isRunning
+      ? `<button class="btn btn-secondary run-pause-btn" data-id="${t.id}" style="padding:3px 8px;font-size:.72rem">暂停</button>`
+      : '';
+    const resumeBtn = (isPaused || t.status === 'partial_failed')
+      ? `<button class="btn btn-primary run-resume-btn" data-id="${t.id}" style="padding:3px 8px;font-size:.72rem">续跑</button>`
+      : '';
+    const rerunBtn = isDone
+      ? `<button class="btn btn-secondary run-rerun-btn" data-id="${t.id}" style="padding:3px 8px;font-size:.72rem">重跑</button>`
+      : '';
+    const modelLabel = getModel(t);
+    return `
+      <tr data-id="${t.id}">
+        <td style="font-family:monospace;font-size:.78rem">${escapeHtml(t.batch_id||'—')}</td>
+        <td><b>${escapeHtml(t.task_name || 'NA')}</b></td>
+        <td>${sourceLabel}</td>
+        <td style="font-family:monospace;font-size:.78rem">${escapeHtml(modelLabel || '—')}</td>
+        <td>${statusBadge(t.status)}</td>
+        <td>
+          <span class="mini-progress"><div style="width:${pct}%"></div></span>
+          <span style="font-size:.75rem;color:var(--text-muted);margin-left:6px">${processed}/${total}</span>
+          <div style="font-size:.7rem;color:var(--text-muted);margin-top:2px">
+            <span style="color:var(--green)">✓ ${done}</span>　<span style="color:#dc2626">✗ ${fail}</span>
+          </div>
+        </td>
+        <td style="font-size:.78rem;color:var(--text-muted)">${fmtTime(t.created_at)}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-secondary hd-cfg-btn"  data-id="${t.id}" style="padding:3px 8px;font-size:.72rem">配置</button>
+          <button class="btn btn-secondary hd-view-btn" data-id="${t.id}" style="padding:3px 8px;font-size:.72rem">结果</button>
+          ${pauseBtn}${resumeBtn}${rerunBtn}
+          <a class="btn btn-primary" style="padding:3px 8px;font-size:.72rem;text-decoration:none;display:inline-block${dlDisabled?';opacity:.4;pointer-events:none':''}"
+             href="http://localhost:8000/batch2/jobs/${t.id}/export?token=${tk}">下载</a>
+        </td>
+      </tr>`;
+  }).join('');
+
+  body.querySelectorAll('.hd-cfg-btn').forEach(b => {
+    b.addEventListener('click', async () => {
+      _loadingFromHistory = true;
+      try {
+        const job = _historyList.find(j => String(j.id) === b.dataset.id);
+        if (!job) return;
+        const cfg = JSON.parse(job.config_json || '{}');
+        if (job.source_type === 'script') {
+          document.querySelector('.tab-btn[data-tab="script"]').click();
+          await loadScriptIntoEditor(job.script_code || '', job.task_name || '', cfg, job.id);
+        } else {
+          document.querySelector('.tab-btn[data-tab="click-config"]').click();
+          await loadConfigIntoClickForm(cfg, job.task_name || '');
+        }
+        _inHistoricalView = true;
+      } catch(e) {
+        console.error('加载配置失败：', e);
+      } finally {
+        _loadingFromHistory = false;
+      }
+    });
+  });
+  body.querySelectorAll('.hd-view-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const job = _historyList.find(j => String(j.id) === btn.dataset.id);
+      openHistoryDetail(btn.dataset.id, job ? JSON.stringify(job) : '{}');
+    });
+  });
+  body.querySelectorAll('.run-pause-btn').forEach(b => {
+    b.addEventListener('click', async () => {
+      if (!confirm('确定暂停？已完成的行保留。')) return;
+      try {
+        await fetch(`http://localhost:8000/batch2/jobs/${b.dataset.id}/pause`, { method:'POST', headers: authHeaders() });
+        loadHistory(true);
+      } catch(e) { alert('暂停失败：' + e.message); }
+    });
+  });
+  body.querySelectorAll('.run-rerun-btn').forEach(b => {
+    b.addEventListener('click', async () => {
+      if (!confirm('用相同配置重新跑一次（创建新批次）？')) return;
+      try {
+        const res = await fetch(`http://localhost:8000/batch2/jobs/${b.dataset.id}/rerun`, {
+          method:'POST', headers: authHeaders(), body: JSON.stringify({})
+        });
+        if (!res.ok) throw new Error(await res.text());
+        consumeRunStream(res);
+        setTimeout(() => loadHistory(true), 500);
+      } catch(e) { alert('重跑失败：' + e.message); }
+    });
+  });
+  body.querySelectorAll('.run-resume-btn').forEach(b => {
+    b.addEventListener('click', async () => {
+      if (!confirm('从已完成行之后继续跑（沿用原配置）？')) return;
+      try {
+        const res = await fetch(`http://localhost:8000/batch2/jobs/${b.dataset.id}/resume`, {
+          method:'POST', headers: authHeaders(), body: JSON.stringify({})
+        });
+        if (!res.ok) throw new Error(await res.text());
+        consumeRunStream(res);
+        setTimeout(() => loadHistory(true), 500);
+      } catch(e) { alert('续跑失败：' + e.message); }
+    });
+  });
+
+  updateSortIndicators();
+}
+
+function updateSortIndicators() {
+  document.querySelectorAll('#historyTable thead th.sortable').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    const ind = th.querySelector('.sort-ind');
+    if (th.dataset.sort === _historySort.field) {
+      th.classList.add('sort-' + _historySort.dir);
+      if (ind) ind.textContent = _historySort.dir === 'asc' ? '▲' : '▼';
+    } else if (ind) {
+      ind.textContent = '↕';
+    }
+  });
+}
+
+// 表头排序 + 过滤事件绑定(一次性)
+document.querySelectorAll('#historyTable thead th.sortable').forEach(th => {
+  th.addEventListener('click', () => {
+    const f = th.dataset.sort;
+    if (_historySort.field === f) {
+      _historySort.dir = _historySort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      _historySort = { field: f, dir: 'asc' };
+    }
+    renderHistoryList();
+  });
+});
+document.querySelectorAll('#historyTable thead .hd-filter').forEach(el => {
+  const evt = el.tagName === 'SELECT' ? 'change' : 'input';
+  el.addEventListener(evt, () => {
+    _historyFilters[el.dataset.filter] = el.value.trim();
+    renderHistoryList();
+  });
+  // 阻止点击过滤行时触发上方 th 的排序
+  el.addEventListener('click', e => e.stopPropagation());
+});
+
+function startHistoryAutoRefresh() {
+  if (_historyAutoTimer) return;
+  document.getElementById('historyAutoHint').textContent = '运行中 · 自动刷新 (3s)';
+  _historyAutoTimer = setInterval(() => {
+    // 只有列表页显示时才刷新
+    if (document.getElementById('historyListView').style.display !== 'none' &&
+        document.getElementById('tab-history').classList.contains('active')) {
+      loadHistory(true);
+    }
+  }, 3000);
+}
+
+function stopHistoryAutoRefresh() {
+  if (_historyAutoTimer) { clearInterval(_historyAutoTimer); _historyAutoTimer = null; }
+  document.getElementById('historyAutoHint').textContent = '';
+}
+
+// ── 图片预览 ───────────────────────────────────────────
+function imgPreviewUrl(path) {
+  const tk = encodeURIComponent(localStorage.getItem('platform_token') || '');
+  return `http://localhost:8000/batch2/local-image?path=${encodeURIComponent(path)}&token=${tk}`;
+}
+function isImagePath(s) {
+  return typeof s === 'string' && /\.(jpe?g|png|gif|webp|bmp)\s*$/i.test(s.trim());
+}
+function renderInputCell(inputObj, fields) {
+  const keys = fields && fields.length ? fields : Object.keys(inputObj);
+  return keys.map(f => {
+    const v = inputObj[f];
+    if (v == null || v === '') return `<div><b>${escapeHtml(f)}:</b> —</div>`;
+    if (isImagePath(String(v))) {
+      const p = String(v).trim();
+      const fname = p.split('/').pop();
+      return `<div style="display:flex;align-items:center;gap:8px;margin:2px 0">
+        <img class="img-thumb" src="${imgPreviewUrl(p)}" data-full="${escapeHtml(p)}"
+             onerror="this.outerHTML='<span class=\\'img-thumb broken\\' title=\\'加载失败\\'></span>'">
+        <span style="font-size:.78rem;color:var(--text-muted);word-break:break-all">${escapeHtml(fname)}</span>
+      </div>`;
+    }
+    const text = String(v);
+    return `<div style="margin:2px 0"><b>${escapeHtml(f)}:</b> ${escapeHtml(text.length>120 ? text.slice(0,120)+'…' : text)}</div>`;
+  }).join('');
+}
+
+(function initImageModal() {
+  const m = document.getElementById('imgModal');
+  const img = document.getElementById('imgModalImg');
+  document.addEventListener('click', e => {
+    if (e.target.classList && e.target.classList.contains('img-thumb') && !e.target.classList.contains('broken')) {
+      img.src = e.target.dataset.full ? imgPreviewUrl(e.target.dataset.full) : e.target.src;
+      m.style.display = 'flex';
+    } else if (e.target === m || e.target === img) {
+      m.style.display = 'none';
+    }
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') m.style.display = 'none'; });
+})();
+
+// ── 详情页分页相关 ─────────────────────────────────────
+const HD_PAGE_SIZE = 10000;  // 服务端一次拉的上限,基本一次性拿全
+let _hdPageOffset = 0;
+let _hdTotal = 0;
+let _hdHasMore = false;
+let _hdColFilters = {};   // {field: 'text', '__output': '...', '__error': '...'}
+let _hdRerender = null;   // openHistoryDetail 设置,供 col-filter 触发重渲
+let _hdPage = 1;
+let _hdPageSize = 25;
+let _hdLastFilterSig = ''; // 筛选条件指纹,变化时自动重置到第 1 页
+
+// 给详情表头每个 TH 加列宽拖拽手柄
+function installColResizers() {
+  const ths = document.querySelectorAll('#hdHead > tr > th');
+  ths.forEach((th, idx) => {
+    if (idx === ths.length - 1) return; // 最后一列不加
+    if (th.querySelector('.col-resizer')) return;
+    const handle = document.createElement('div');
+    handle.className = 'col-resizer';
+    handle.style.cssText = 'position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;user-select:none;z-index:3';
+    handle.addEventListener('mousedown', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startW = th.offsetWidth;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      const onMove = ev => {
+        const w = Math.max(40, startW + (ev.clientX - startX));
+        th.style.width = w + 'px';
+        th.style.minWidth = w + 'px';
+        th.style.maxWidth = w + 'px';
+      };
+      const onUp = () => {
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    th.appendChild(handle);
+  });
+}
+
+// 详情表格列结构:根据首行 input_json 判断哪些字段是图片路径,将其拆成名称列+缩略图列
+function buildColumns(fields, sampleRow) {
+  const cols = [];
+  for (const f of fields) {
+    const v = sampleRow ? sampleRow[f] : null;
+    if (v != null && isImagePath(String(v))) {
+      cols.push({ field: f, kind: 'imgname',  header: f + '(名称)' });
+      cols.push({ field: f, kind: 'imgthumb', header: f + '(缩略)' });
+    } else {
+      cols.push({ field: f, kind: 'value', header: f });
+    }
+  }
+  return cols;
+}
+
+async function openHistoryDetail(jobId, jobStr) {
+  document.getElementById('historyListView').style.display = 'none';
+  document.getElementById('historyDetailView').style.display = '';
+  _historyCurrentDetailId = jobId;
+  _historyAllRows = [];
+  _hdPageOffset = 0; _hdTotal = 0; _hdHasMore = false;
+  _hdColFilters = {};
+  _hdPage = 1;
+  _hdLastFilterSig = '';
+  // 持久化:刷新后能恢复
+  try { sessionStorage.setItem('batch_detail_' + jobId, jobStr || '{}'); } catch {}
+  updateHash({ tab: 'history', detail: jobId });
+
+  let jobMeta = null;
+  try { jobMeta = JSON.parse(jobStr || '{}'); } catch {}
+  const isScript = (jobMeta?.source_type === 'script');
+  let cfg = {};
+  try { cfg = JSON.parse(jobMeta?.config_json || '{}'); } catch {}
+
+  // 动态表头：行号 + 每个字段一列 + 识别结果 + 状态 + 耗时 + 错误信息 + 操作
+  const detailFields = isScript ? [] : (cfg.selected_fields || []);
+  function renderHdHead(columns) {
+    const mkFilterTh = (field, label, baseStyle) => {
+      const cur = _hdColFilters[field] || '';
+      const inputShow = cur ? '' : 'display:none;';
+      return `<th style="${baseStyle};position:relative">
+        <div style="display:flex;align-items:center;gap:4px">
+          <span style="flex:1">${escapeHtml(label)}</span>
+          <button class="col-filter-btn" type="button" data-field="${escapeHtml(field)}" title="筛选"
+            style="cursor:pointer;background:none;border:none;color:${cur?'var(--green)':'var(--text-muted)'};font-size:.85rem;padding:0 2px;line-height:1">▾</button>
+        </div>
+        <input class="col-filter-input" type="text" data-field="${escapeHtml(field)}" placeholder="包含..." value="${escapeHtml(cur)}"
+          style="${inputShow}width:100%;margin-top:4px;padding:2px 4px;font-size:.75rem;box-sizing:border-box">
+      </th>`;
+    };
+    const mkStatusTh = (baseStyle) => {
+      const cur = _hdColFilters['__status'] || '';
+      const inputShow = cur ? '' : 'display:none;';
+      return `<th style="${baseStyle};position:relative">
+        <div style="display:flex;align-items:center;gap:4px">
+          <span style="flex:1">状态</span>
+          <button class="col-filter-btn" type="button" data-field="__status" title="筛选"
+            style="cursor:pointer;background:none;border:none;color:${cur?'var(--green)':'var(--text-muted)'};font-size:.85rem;padding:0 2px;line-height:1">▾</button>
+        </div>
+        <select class="col-filter-status" data-field="__status"
+          style="${inputShow}width:100%;margin-top:4px;padding:2px 4px;font-size:.75rem;box-sizing:border-box">
+          <option value="">全部</option>
+          <option value="ok" ${cur==='ok'?'selected':''}>成功</option>
+          <option value="err" ${cur==='err'?'selected':''}>失败</option>
+        </select>
+      </th>`;
+    };
+    const fieldCols = columns.map(c => {
+      if (c.kind === 'imgthumb') {
+        return `<th style="width:90px;position:relative">${escapeHtml(c.header)}</th>`;
+      }
+      return mkFilterTh(c.field, c.header, 'min-width:140px');
+    }).join('');
+    document.getElementById('hdHead').innerHTML = `<tr>
+      <th style="width:80px;position:relative">行号</th>
+      ${fieldCols}
+      ${mkFilterTh('__output', 'result', 'min-width:280px')}
+      ${mkStatusTh('width:80px')}
+      <th style="width:80px;position:relative">耗时(s)</th>
+      ${mkFilterTh('__error', '错误信息', 'min-width:160px')}
+      <th style="width:160px;position:relative">操作</th>
+    </tr>`;
+    installColResizers();
+    // 事件绑定（只绑一次,后续 innerHTML 替换不影响外层元素的 listener）
+    const head = document.getElementById('hdHead');
+    if (!head._filterBound) {
+      head.addEventListener('click', e => {
+        const btn = e.target.closest('.col-filter-btn');
+        if (!btn) return;
+        const inp = btn.closest('th').querySelector('.col-filter-input, .col-filter-status');
+        if (!inp) return;
+        const hidden = inp.style.display === 'none';
+        inp.style.display = hidden ? 'block' : 'none';
+        if (hidden) inp.focus();
+      });
+      let _debounce = 0;
+      head.addEventListener('input', e => {
+        const inp = e.target.closest('.col-filter-input');
+        if (!inp) return;
+        const field = inp.dataset.field;
+        const val = inp.value.trim();
+        if (val) _hdColFilters[field] = val;
+        else delete _hdColFilters[field];
+        clearTimeout(_debounce);
+        _debounce = setTimeout(() => { if (_hdRerender) _hdRerender(); }, 150);
+      });
+      head.addEventListener('change', e => {
+        const sel = e.target.closest('.col-filter-status');
+        if (!sel) return;
+        const val = sel.value;
+        if (val) _hdColFilters['__status'] = val;
+        else delete _hdColFilters['__status'];
+        // 同步按钮颜色（无需整表重渲表头）
+        const th = sel.closest('th');
+        const btn = th && th.querySelector('.col-filter-btn');
+        if (btn) btn.style.color = val ? 'var(--green)' : 'var(--text-muted)';
+        if (_hdRerender) _hdRerender();
+      });
+      head._filterBound = true;
+    }
+  }
+  // 初始表头(数据未到时):非脚本模式按 selected_fields 列出,均按 value 渲染
+  const initialCols = detailFields.map(f => ({ field: f, kind: 'value', header: f }));
+  renderHdHead(initialCols);
+  const colCount = 6 + initialCols.length;
+  document.getElementById('hdBody').innerHTML =
+    `<tr><td colspan="${colCount}" style="padding:14px;color:var(--text-muted);text-align:center">加载中…</td></tr>`;
+
+  // 兼容旧调用：loadDetailPage 期望 settings 含 selected_fields/prompt_template
+  const settingsForDetail = isScript
+    ? { _renderHdHead: renderHdHead, _columns: initialCols }
+    : { ...cfg, _renderHdHead: renderHdHead, _columns: initialCols };
+  _hdRerender = () => renderDetailRows(settingsForDetail, isScript);
+  await loadDetailPage(jobId, settingsForDetail, isScript, true);
+}
+
+async function loadDetailPage(jobId, settings, isScript, reset = false) {
+  if (reset) { _historyAllRows = []; _hdPageOffset = 0; }
+  const fields = (!isScript && settings?.selected_fields) || [];
+  const colCount = 6 + fields.length;
+  try {
+    const res = await fetch(
+      `http://localhost:8000/batch2/jobs/${jobId}/rows?offset=${_hdPageOffset}&limit=${HD_PAGE_SIZE}`,
+      { headers: authHeaders() });
+    if (!res.ok) throw new Error(await res.text());
+    const d = await res.json();
+    const newRows = d.rows || d;
+    _hdTotal = d.total != null ? d.total : (newRows.length + _hdPageOffset);
+    _historyAllRows.push(...newRows);
+    _hdPageOffset = _historyAllRows.length;
+    _hdHasMore = _historyAllRows.length < _hdTotal;
+    if (!_historyAllRows.length) {
+      document.getElementById('hdBody').innerHTML =
+        `<tr><td colspan="${colCount}" style="padding:14px;color:var(--text-muted);text-align:center">无结果</td></tr>`;
+      document.getElementById('hdRowCount').textContent = '';
+      return;
+    }
+    // 数据到手后,根据首行 input_json 构建列结构（识别图片字段并拆分）
+    if (settings?._renderHdHead && reset) {
+      let firstInput = {};
+      try { firstInput = JSON.parse((_historyAllRows[0].input_json || '{}').replace(/\bNaN\b/g, 'null').replace(/\b-?Infinity\b/g, 'null')); } catch {}
+      const fields = isScript
+        ? Object.keys(firstInput).filter(k => k !== '脚本')
+        : (settings.selected_fields || []);
+      if (isScript) settings._scriptFields = fields;
+      settings._columns = buildColumns(fields, firstInput);
+      settings._renderHdHead(settings._columns);
+    }
+    renderDetailRows(settings, isScript);
+  } catch(e) {
+    document.getElementById('hdBody').innerHTML =
+      `<tr><td colspan="${colCount}" style="padding:14px;color:#dc2626;text-align:center">加载失败：${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+function renderDetailRows(settings, isScript) {
+  const statusFilter = _hdColFilters['__status'] || '';
+  const kw = (document.getElementById('hdSearchInput')?.value || '').trim().toLowerCase();
+  const columns = settings?._columns
+    || (isScript
+        ? (settings?._scriptFields || []).map(f => ({field:f, kind:'value', header:f}))
+        : (settings?.selected_fields || []).map(f => ({field:f, kind:'value', header:f})));
+  const colCount = 6 + columns.length;
+  const body = document.getElementById('hdBody');
+
+  let list = _historyAllRows;
+  if (statusFilter === 'ok')  list = list.filter(r => r.success);
+  if (statusFilter === 'err') list = list.filter(r => !r.success);
+  if (kw) {
+    list = list.filter(r =>
+      (r.input_json||'').toLowerCase().includes(kw) ||
+      (r.output_text||'').toLowerCase().includes(kw)
+    );
+  }
+  // 列筛选（排除 __status，已单独处理）
+  const activeColFilters = Object.entries(_hdColFilters).filter(([k,v]) => v && k !== '__status');
+  if (activeColFilters.length) {
+    list = list.filter(r => {
+      let inputObj = {};
+      try { inputObj = JSON.parse((r.input_json || '{}').replace(/\bNaN\b/g, 'null').replace(/\b-?Infinity\b/g, 'null')); } catch {}
+      for (const [field, fv] of activeColFilters) {
+        const needle = String(fv).toLowerCase();
+        let hay;
+        if (field === '__output')      hay = String(r.output_text || '');
+        else if (field === '__error')  hay = String(r.error_msg || '');
+        else                           hay = String(inputObj[field] ?? '');
+        if (!hay.toLowerCase().includes(needle)) return false;
+      }
+      return true;
+    });
+  }
+
+  // 筛选条件变化 → 自动回到第 1 页
+  const filterSig = JSON.stringify({ statusFilter, kw, cols: _hdColFilters });
+  if (filterSig !== _hdLastFilterSig) { _hdPage = 1; _hdLastFilterSig = filterSig; }
+
+  // 分页切片
+  const totalPages = Math.max(1, Math.ceil(list.length / _hdPageSize));
+  if (_hdPage > totalPages) _hdPage = totalPages;
+  if (_hdPage < 1) _hdPage = 1;
+  const startIdx = (_hdPage - 1) * _hdPageSize;
+  const pageList = list.slice(startIdx, startIdx + _hdPageSize);
+  const rangeEnd = Math.min(startIdx + _hdPageSize, list.length);
+
+  document.getElementById('hdRowCount').innerHTML =
+    `共 ${_hdTotal} 行${list.length !== _historyAllRows.length ? `(筛选后 ${list.length})` : ''}` +
+    `${list.length ? ` · 显示 ${startIdx + 1}-${rangeEnd}` : ''}`;
+  document.getElementById('hdPageInfo').textContent = `第 ${_hdPage} / ${totalPages} 页`;
+  document.getElementById('hdPagePrev').disabled  = _hdPage <= 1;
+  document.getElementById('hdPageFirst').disabled = _hdPage <= 1;
+  document.getElementById('hdPageNext').disabled  = _hdPage >= totalPages;
+  document.getElementById('hdPageLast').disabled  = _hdPage >= totalPages;
+  document.getElementById('hdLoadMoreHint').innerHTML = _hdHasMore
+    ? ` · <a href="#" id="hdLoadMore" style="color:var(--green)">加载更多 (剩余 ${_hdTotal - _historyAllRows.length} 条)</a>`
+    : '';
+
+  if (!list.length) {
+    body.innerHTML = `<tr><td colspan="${colCount}" style="padding:14px;color:var(--text-muted);text-align:center">无匹配项</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = pageList.map((r, i) => {
+    let inputObj = {}; try { inputObj = JSON.parse((r.input_json || '{}').replace(/\bNaN\b/g, 'null').replace(/\b-?Infinity\b/g, 'null')); } catch {}
+    // 按列结构渲染:imgname=纯文件名, imgthumb=纯缩略图, value=值(行内若仍是图片路径则混合显示)
+    const fieldCells = columns.map(c => {
+      const v = inputObj[c.field];
+      const sv = v == null ? '' : String(v);
+      if (c.kind === 'imgname') {
+        const fname = sv.split(/[\\/]/).pop();
+        return `<td style="vertical-align:top;font-size:.78rem;word-break:break-all;max-width:220px">${escapeHtml(fname)}</td>`;
+      }
+      if (c.kind === 'imgthumb') {
+        if (!sv || !isImagePath(sv)) return `<td style="vertical-align:top"></td>`;
+        return `<td style="vertical-align:top">
+          <img class="img-thumb" src="${imgPreviewUrl(sv)}" data-full="${escapeHtml(sv)}"
+               onerror="this.outerHTML='<span class=\\'img-thumb broken\\' title=\\'加载失败\\'></span>'">
+        </td>`;
+      }
+      // value: 兼容某行刚好是图片路径的情况(虽然首行判定为非 image)
+      if (isImagePath(sv)) {
+        const fname = sv.split(/[\\/]/).pop();
+        return `<td style="vertical-align:top">
+          <div style="display:flex;align-items:flex-start;gap:6px">
+            <img class="img-thumb" src="${imgPreviewUrl(sv)}" data-full="${escapeHtml(sv)}"
+                 onerror="this.outerHTML='<span class=\\'img-thumb broken\\' title=\\'加载失败\\'></span>'">
+            <span style="font-size:.72rem;color:var(--text-muted);word-break:break-all">${escapeHtml(fname)}</span>
+          </div></td>`;
+      }
+      const safe = escapeHtml(sv);
+      return `<td style="max-width:240px;font-size:.82rem;white-space:pre-wrap;word-break:break-word;vertical-align:top">${safe.length > 400 ? safe.slice(0,400) + '…' : safe}</td>`;
+    }).join('');
+
+    const outputText = String(r.output_text || '');
+    let resultVal = outputText;
+    if (!isScript) {
+      try { const p = JSON.parse(outputText); if (p && 'result' in p) resultVal = String(p.result ?? ''); } catch {}
+    }
+    let outputCell;
+    if (isImagePath(resultVal.trim())) {
+      const fname = resultVal.trim().split(/[\\/]/).pop();
+      outputCell = `<td style="vertical-align:top">
+        <div style="display:flex;align-items:flex-start;gap:6px">
+          <img class="img-thumb" src="${imgPreviewUrl(resultVal.trim())}" data-full="${escapeHtml(resultVal.trim())}"
+               onerror="this.outerHTML='<span class=\\'img-thumb broken\\' title=\\'加载失败\\'></span>'">
+          <span style="font-size:.72rem;color:var(--text-muted);word-break:break-all">${escapeHtml(fname)}</span>
+        </div></td>`;
+    } else {
+      outputCell = `<td style="max-width:520px;white-space:pre-wrap;word-break:break-word;font-size:.85rem;vertical-align:top">${escapeHtml(resultVal)}</td>`;
+    }
+
+    const status = r.success
+      ? '<span class="result-status-ok">成功</span>'
+      : '<span class="result-status-err">失败</span>';
+    // 耗时秒数（一位小数）
+    let durSec = '—';
+    if (r.started_at && r.finished_at) {
+      try {
+        const ms = new Date(r.finished_at) - new Date(r.started_at);
+        if (ms >= 0) durSec = (ms/1000).toFixed(1);
+      } catch {}
+    }
+    const errCell = escapeHtml(r.error_msg || '');
+    const rowCls = r.success ? '' : 'class="row-failed"';
+    const inputJsonAttr = escapeHtml(JSON.stringify(inputObj));
+    const outputAttr    = escapeHtml(outputText);
+
+    return `<tr ${rowCls}>
+      <td style="vertical-align:top">${r.row_index ?? i}</td>
+      ${fieldCells}
+      ${outputCell}
+      <td style="vertical-align:top">${status}</td>
+      <td style="font-size:.78rem;color:var(--text-muted);vertical-align:top">${durSec}</td>
+      <td style="font-size:.78rem;color:#dc2626;white-space:pre-wrap;word-break:break-word;vertical-align:top">${errCell}</td>
+      <td style="white-space:nowrap;vertical-align:top">
+        <button class="copy-btn" data-copy="${inputJsonAttr}" title="复制输入">复制输入</button>
+        <button class="copy-btn" data-copy="${outputAttr}" title="复制输出" style="margin-left:2px">复制输出</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // 复制按钮
+  body.querySelectorAll('.copy-btn').forEach(b => {
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      const txt = b.getAttribute('data-copy') || '';
+      const tmp = document.createElement('textarea'); tmp.innerHTML = txt;
+      navigator.clipboard.writeText(tmp.value).then(() => {
+        const orig = b.textContent;
+        b.textContent = '✓ 已复制';
+        setTimeout(() => { b.textContent = orig; }, 1000);
+      });
+    });
+  });
+
+  // 加载更多
+  const more = document.getElementById('hdLoadMore');
+  if (more) more.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await loadDetailPage(_historyCurrentDetailId, settings, isScript, false);
+  });
+}
+
+function renderOutputCell(r) {
+  const text = r.output_text || '';
+  const type = r.output_type || 'text';
+  const path = r.output_path || '';
+  if (type === 'image' && path) return `<img src="${escapeHtml(path)}" style="max-height:200px;max-width:100%;border-radius:6px;cursor:zoom-in" onclick="window.open('${escapeHtml(path)}','_blank')">`;
+  if (type === 'file' && path) return `<a href="${escapeHtml(path)}" target="_blank" style="color:var(--green)">📎 ${escapeHtml(path.split('/').pop())}</a>`;
+  return escapeHtml(text);
+}
+
+document.getElementById('refreshHistoryBtn').addEventListener('click', () => loadHistory());
+document.getElementById('hdBackBtn').addEventListener('click', () => {
+  document.getElementById('historyDetailView').style.display = 'none';
+  document.getElementById('historyListView').style.display = '';
+  _historyCurrentDetailId = null;
+  updateHash({ tab: 'history', detail: null });
+  // 保持当前所在层级（task list 或 runs list）
+});
+document.getElementById('hdExportBtn').addEventListener('click', () => {
+  if (!_historyCurrentDetailId) return;
+  const tk = encodeURIComponent(localStorage.getItem('platform_token') || '');
+  window.location.href = `http://localhost:8000/batch2/jobs/${_historyCurrentDetailId}/export?token=${tk}`;
+});
+
+document.getElementById('hdSearchInput').addEventListener('input', () => {
+  if (_historyCurrentDetailId) {
+    const tr = document.querySelector(`#historyListBody tr[data-id="${_historyCurrentDetailId}"]`);
+    let s = {}; try { s = JSON.parse(tr?.dataset.settings || '{}'); } catch {}
+    renderDetailRows(s, s.type === 'script');
+  }
+});
+
+// ── 详情表格分页控件 ─────────────────────────────────────
+document.getElementById('hdPageSize').addEventListener('change', e => {
+  _hdPageSize = parseInt(e.target.value) || 25;
+  _hdPage = 1;
+  if (_hdRerender) _hdRerender();
+});
+function _hdGoToPage(p) {
+  _hdPage = p;
+  if (_hdRerender) _hdRerender();
+}
+document.getElementById('hdPageFirst').addEventListener('click', () => _hdGoToPage(1));
+document.getElementById('hdPagePrev').addEventListener('click',  () => _hdGoToPage(_hdPage - 1));
+document.getElementById('hdPageNext').addEventListener('click',  () => _hdGoToPage(_hdPage + 1));
+document.getElementById('hdPageLast').addEventListener('click',  () => _hdGoToPage(Number.MAX_SAFE_INTEGER));
+
+// ══════════════════════════════════════════════════════════
+// 脚本编辑器
+// ══════════════════════════════════════════════════════════
+(function initScriptEditor() {
+
+const TEMPLATE = `# 可用变量：
+#   df        — 已加载的 DataFrame（parquet/json/csv/excel）
+#   WORK_DIR  — 本次运行的独立工作目录
+#   AI_MODEL  — 当前选中的模型名
+#
+# 可用函数：
+#   chat(prompt, model=None)  → 调 AI，返回文本
+#   show_image(path)          → 在日志区显示图片
+#   show_chart(fig)           → 在日志区显示 matplotlib 图表
+#   show_video(path)          → 在日志区显示视频
+#   save_file(path)           → 加入结果文件列表
+
+import os
+import pandas as pd
+
+print(f"数据形状: {df.shape}")
+print(df.head())
+
+# 示例：批量调 AI
+# df["result"] = df["content"].apply(lambda x: chat(x))
+# output_path = os.path.join(WORK_DIR, "output.csv")
+# df.to_csv(output_path, index=False)
+# save_file(output_path)
+`;
+
+let monacoEditor = null;
+
+function initMonaco() {
+  if (monacoEditor || !window.require) return;
+  require(['vs/editor/editor.main'], function () {
+    monacoEditor = monaco.editor.create(
+      document.getElementById('scriptEditorContainer'), {
+        value: window._pendingScriptCode || TEMPLATE,
+        language: 'python',
+        theme: 'vs-dark',
+        fontSize: 13,
+        minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+        automaticLayout: true,
+        tabSize: 4,
+        insertSpaces: true,
+        wordWrap: 'on',
+      }
+    );
+    window.monacoEditor = monacoEditor;
+    window._pendingScriptCode = null;
+  });
+}
+
+// Monaco 在脚本 Tab 第一次显示时初始化
+const scriptTabBtn = document.querySelector('.tab-btn[data-tab="script"]');
+scriptTabBtn?.addEventListener('click', () => {
+  if (!monacoEditor) initMonaco();
+});
+
+// 把全局 monacoEditor 暴露给外层（主脚本里历史回填用）
+Object.defineProperty(window, '_resetScriptEditor', {
+  value: () => {
+    if (monacoEditor) monacoEditor.setValue(TEMPLATE);
+    document.getElementById('scriptTaskName').value = '';
+    document.getElementById('scriptTaskIdPreview').value = '';
+  },
+});
+
+
+document.querySelector('.tab-btn[data-tab="script"]')
+  ?.addEventListener('click', () => {
+    setTimeout(initMonaco, 80);
+    if (!_scriptConfigs.length) loadScriptConfigs();
+  });
+
+// ── 文件上传 ──────────────────────────────────────────────
+let uploadedFileId = null;
+const sFileDrop  = document.getElementById('scriptFileDrop');
+const sFileInput = document.getElementById('scriptFileInput');
+const sFileInfo  = document.getElementById('scriptFileInfo');
+
+sFileDrop.addEventListener('click', () => {
+  if (window._uploadConfirmed) { sFileInput.click(); return; }
+  window.gateUpload?.(() => sFileInput.click());
+});
+// 防御:直接拦截 #scriptFileInput 的 click(任何路径触发都会走闸门)
+sFileInput.addEventListener('click', e => {
+  if (window._uploadConfirmed) return;
+  e.preventDefault();
+  window.gateUpload?.(() => sFileInput.click());
+});
+sFileDrop.addEventListener('dragover',  e  => { e.preventDefault(); sFileDrop.classList.add('dragover'); });
+sFileDrop.addEventListener('dragleave', ()  => sFileDrop.classList.remove('dragover'));
+sFileDrop.addEventListener('drop', e => {
+  e.preventDefault(); sFileDrop.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  if (window._uploadConfirmed) { uploadScriptFile(f); return; }
+  window.gateUpload?.(() => uploadScriptFile(f));
+});
+sFileInput.addEventListener('change', () => {
+  if (sFileInput.files[0]) uploadScriptFile(sFileInput.files[0]);
+});
+document.getElementById('scriptFileClear').addEventListener('click', () => {
+  uploadedFileId = null;
+  window._uploadedFileId = null;
+  sFileDrop.style.display = ''; sFileInfo.style.display = 'none'; sFileInput.value = '';
+});
+
+async function uploadScriptFile(file) {
+  sFileDrop.style.display = 'none'; sFileInfo.style.display = 'flex';
+  document.getElementById('scriptFileName').textContent = file.name;
+  const statsEl = document.getElementById('scriptFileStats');
+  statsEl.textContent = '上传中…'; statsEl.style.color = '';
+  const form = new FormData(); form.append('file', file);
+  try {
+    const token = localStorage.getItem('platform_token') || '';
+    const res = await fetch('http://localhost:8000/script/upload', {
+      method: 'POST',
+      headers: { 'X-Token': token },
+      body: form,
+    });
+    if (!res.ok) { const d = await res.json(); throw new Error(d.detail); }
+    const d = await res.json();
+    uploadedFileId = d.file_id;
+    window._uploadedFileId = d.file_id;
+    const colPreview = (d.col_names || []).slice(0, 4).join(', ');
+    statsEl.textContent = `${d.rows.toLocaleString()} 行 · ${d.columns} 列 (${colPreview}${d.columns > 4 ? '…' : ''})`;
+  } catch(e) {
+    statsEl.textContent = '上传失败：' + e.message;
+    statsEl.style.color = '#dc2626';
+  }
+}
+
+
+// ── 模型配置联动 ──────────────────────────────────────────
+let _scriptConfigs = [];
+
+async function loadScriptConfigs() {
+  const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
+  _scriptConfigs = await res.json().catch(() => []);
+  const providers = [...new Set(_scriptConfigs.map(c => c.provider))];
+  const pSel = document.getElementById('scriptProviderSel');
+  pSel.innerHTML = '<option value="">— 请选择 —</option>' +
+    providers.map(p => `<option value="${p}">${p}</option>`).join('');
+}
+
+document.getElementById('scriptProviderSel').addEventListener('change', e => {
+  const filtered = _scriptConfigs.filter(c => c.provider === e.target.value);
+  const cSel = document.getElementById('scriptConfigSel');
+  cSel.innerHTML = filtered.length
+    ? '<option value="">— 请选择 —</option>' + filtered.map(c =>
+        `<option value="${c.request_id}">${c.api_name || c.sub_account_name || c.project_name || c.request_id}</option>`
+      ).join('')
+    : '<option value="">— 暂无 —</option>';
+  document.getElementById('scriptModelSel').innerHTML = '<option value="">— 请选择 —</option>';
+});
+
+document.getElementById('scriptConfigSel').addEventListener('change', e => {
+  const requestId = e.target.value; if (!requestId) return;
+  const entry = _scriptConfigs.find(c => String(c.request_id) === String(requestId));
+  const models = entry?.available_models
+    ? entry.available_models.split(',').map(m => m.trim()).filter(Boolean)
+    : [];
+  const mSel = document.getElementById('scriptModelSel');
+  mSel.innerHTML = models.length
+    ? models.map(m => `<option value="${m}">${m}</option>`).join('')
+    : '<option value="">— 暂无模型 —</option>';
+});
+
+// ── 输出 Tab 切换 ─────────────────────────────────────────
+document.querySelectorAll('.script-out-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.script-out-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.script-out-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    const id = 'scriptOut' + tab.dataset.out[0].toUpperCase() + tab.dataset.out.slice(1);
+    document.getElementById(id).classList.add('active');
+  });
+});
+
+
+// ── 运行 / 停止 / 清空 ────────────────────────────────────
+let _scriptRunId   = null;
+let _scriptFiles   = 0;
+let _scriptTimer   = null;
+let _scriptAbort   = null;
+let _scriptStdout  = '';        // 缓冲全部 stdout/stderr,运行完保存到历史
+let _scriptFileList = [];       // 运行期间产出的结果文件清单
+let _scriptStartTs = 0;
+
+document.getElementById('scriptRunBtn').addEventListener('click',  runScript);
+document.getElementById('scriptStopBtn').addEventListener('click', () => _scriptAbort?.abort());
+document.getElementById('scriptClearBtn').addEventListener('click', clearScriptOutput);
+
+// ── 语法检查 ───────────────────────────────────────────
+document.getElementById('scriptLintBtn').addEventListener('click', async () => {
+  const code = monacoEditor?.getValue() || '';
+  try {
+    const res = await fetch('http://localhost:8000/batch2/lint', {
+      method:'POST', headers: authHeaders(), body: JSON.stringify({ code })
+    });
+    const d = await res.json();
+    if (d.ok) appendScriptLog('info', `\n✅ 语法检查通过\n`);
+    else appendScriptLog('error', `\n❌ 语法错误：${d.error}\n`);
+  } catch(e) { alert('语法检查失败：' + e.message); }
+});
+
+function clearScriptOutput() {
+  document.getElementById('scriptLog').innerHTML =
+    '<span style="color:var(--text-muted);font-size:.82rem">运行后输出将显示在这里</span>';
+  document.getElementById('scriptResultFiles').innerHTML =
+    '<p style="color:var(--text-muted);font-size:.82rem;padding:16px">暂无结果文件</p>';
+  document.getElementById('scriptDownloadAll').style.display = 'none';
+  document.getElementById('scriptFileBadge').style.display   = 'none';
+  _scriptFiles = 0; _scriptRunId = null;
+}
+
+async function runScript() {
+  const code = monacoEditor?.getValue() ?? '';
+  if (!code.trim()) return;
+  const configId = document.getElementById('scriptConfigSel').value;
+  const model    = document.getElementById('scriptModelSel').value;
+  if (!configId || !model) { alert('请先选择 API 配置和模型'); return; }
+
+  document.querySelector('.script-out-tab[data-out="log"]').click();
+  clearScriptOutput();
+  _scriptStdout = '';
+  _scriptFileList = [];
+  _scriptStartTs = Date.now();
+
+  monacoEditor?.updateOptions({ readOnly: true });
+  document.getElementById('scriptRunBtn').style.display  = 'none';
+  document.getElementById('scriptStopBtn').style.display = '';
+  let elapsed = 0;
+  const timerEl = document.getElementById('scriptTimer');
+  timerEl.textContent = '0s';
+  _scriptTimer = setInterval(() => { elapsed++; timerEl.textContent = elapsed + 's'; }, 1000);
+
+  _scriptAbort = new AbortController();
+
+  const taskName = document.getElementById('scriptTaskName').value.trim() || defaultTaskName();
+  const cfgPayload = JSON.stringify({
+    provider: document.getElementById('scriptProviderSel').value,
+    request_id: configId ? parseInt(configId) : null,
+    model,
+    input_file: (window._uploadedFileId || uploadedFileId || ''),
+  });
+
+  try {
+    const res = await fetch('http://localhost:8000/batch2/run', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({
+        source_type: 'script',
+        task_name: taskName,
+        config_json: cfgPayload,
+        script_code: code,
+        request_id: configId ? parseInt(configId) : null,
+        model,
+      }),
+      signal: _scriptAbort.signal,
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      appendScriptLog('error', (d.detail || `HTTP ${res.status}`) + '\n');
+      return;
+    }
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try { handleScriptEvent(JSON.parse(line.slice(6))); } catch {}
+      }
+    }
+  } catch(e) {
+    if (e.name !== 'AbortError') appendScriptLog('error', '连接中断：' + e.message + '\n');
+    else appendScriptLog('info', '已手动停止\n');
+  } finally {
+    clearInterval(_scriptTimer);
+    monacoEditor?.updateOptions({ readOnly: false });
+    document.getElementById('scriptRunBtn').style.display  = '';
+    document.getElementById('scriptStopBtn').style.display = 'none';
+    timerEl.textContent = '';
+    // 运行完毕：编辑器恢复模板,任务名清空（任务ID 也跟着清空）
+    setTimeout(() => { window._resetScriptEditor?.(); }, 200);
+  }
+}
+
+
+function handleScriptEvent(ev) {
+  const logEl = document.getElementById('scriptLog');
+  switch(ev.type) {
+    case 'stdout': _scriptStdout += ev.text; appendScriptLog('stdout', ev.text); break;
+    case 'stderr': _scriptStdout += ev.text; appendScriptLog('stderr', ev.text); break;
+    case 'error':  _scriptStdout += ev.text; appendScriptLog('error',  ev.text); break;
+    case 'info':   appendScriptLog('info',   ev.text); break;
+    case 'image': {
+      const img = document.createElement('img');
+      img.src = ev.data;
+      logEl.appendChild(img); logEl.scrollTop = logEl.scrollHeight; break;
+    }
+    case 'video': {
+      const vid = document.createElement('video');
+      vid.controls = true;
+      vid.src = `http://localhost:8000/script/result/${ev.run_id}/${ev.filename}`;
+      logEl.appendChild(vid); logEl.scrollTop = logEl.scrollHeight; break;
+    }
+    case 'file': {
+      _scriptRunId = ev.run_id; _scriptFiles++;
+      _scriptFileList.push({ name: ev.name, size: ev.size });
+      const badge = document.getElementById('scriptFileBadge');
+      badge.textContent = _scriptFiles; badge.style.display = '';
+      const filesEl = document.getElementById('scriptResultFiles');
+      if (filesEl.querySelector('p')) filesEl.innerHTML = '';
+      const sizeStr = ev.size > 1048576 ? (ev.size/1048576).toFixed(1)+' MB'
+                    : ev.size > 1024    ? (ev.size/1024).toFixed(1)+' KB'
+                    : ev.size + ' B';
+      const tk = encodeURIComponent(localStorage.getItem('platform_token') || '');
+      const item = document.createElement('div');
+      item.className = 'result-file-item';
+      item.innerHTML = `<span class="file-name">📄 ${ev.name}</span>
+        <span class="file-size">${sizeStr}</span>
+        <a class="btn btn-secondary" style="padding:3px 10px;font-size:.78rem;text-decoration:none"
+           href="http://localhost:8000/script/result/${ev.run_id}/download?token=${tk}"
+           download="result_${ev.run_id.slice(0,8)}.zip">↓</a>`;
+      filesEl.appendChild(item);
+      document.getElementById('scriptDownloadAll').style.display = '';
+      break;
+    }
+    case 'done': {
+      if (ev.run_id) _scriptRunId = ev.run_id;
+      appendScriptLog('info', `\n✅ 完成（${ev.elapsed}s，${ev.file_count} 个结果文件）\n`);
+      // 历史已由后端 /tasks/{id}/run 自动创建,这里不再重复 POST
+      break;
+    }
+    case 'row': {
+      const ok = ev.success ? '✓' : '✗';
+      appendScriptLog(ev.success?'stdout':'error',
+        `[行 ${ev.idx}] ${ok} ${String(ev.output||ev.error||'').slice(0,80)}\n`);
+      break;
+    }
+    case 'task_started': {
+      appendScriptLog('info', `▶ 已创建批次 ${ev.batch_id} (job_id=${ev.job_id})\n`);
+      const idEl = document.getElementById('scriptTaskIdPreview');
+      if (idEl) idEl.value = ev.batch_id || '';
+      break;
+    }
+  }
+}
+
+async function saveScriptHistory(_doneEv) {
+  // no-op: 后端 /batch2/run 已经创建了 batch_jobs 记录，前端无需重复落库
+}
+
+function appendScriptLog(cls, text) {
+  const logEl = document.getElementById('scriptLog');
+  const hint = logEl.querySelector('[style]');
+  if (hint) hint.remove();
+  const span = document.createElement('span');
+  span.className = `log-${cls}`; span.textContent = text;
+  logEl.appendChild(span); logEl.scrollTop = logEl.scrollHeight;
+}
+
+document.getElementById('scriptDlAllBtn').addEventListener('click', () => {
+  if (_scriptRunId) {
+    const tk = encodeURIComponent(localStorage.getItem('platform_token') || '');
+    window.location.href = `http://localhost:8000/script/result/${_scriptRunId}/download?token=${tk}`;
+  }
+});
+
+// 暴露给 IIFE 外部的 loadScriptIntoEditor / loadHistoricalRunLog 使用
+window._loadScriptConfigs = loadScriptConfigs;
+window._getScriptConfigs  = () => _scriptConfigs;
+window._appendScriptLog   = appendScriptLog;
+window._clearScriptOutput = clearScriptOutput;
+
+})(); // initScriptEditor
+
+// ── URL hash 恢复:刷新后回到原 tab / 详情页 ─────────────
+(async function restoreFromHash() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const tab = params.get('tab');
+  const detail = params.get('detail');
+  if (!tab && !detail) return;
+  _navRestoring = true;
+  try {
+    if (tab) {
+      const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+      if (btn) btn.click();
+    }
+    if (detail) {
+      let jobStr = '{}';
+      try { jobStr = sessionStorage.getItem('batch_detail_' + detail) || '{}'; } catch {}
+      // 等 tab 切换/loadHistory 启动后再进详情（避免与 click 事件竞争）
+      await new Promise(r => setTimeout(r, 0));
+      await openHistoryDetail(detail, jobStr);
+    }
+  } finally {
+    _navRestoring = false;
+  }
+})();
 </script>
+
+<!-- 上传前确认弹窗(每次打开本模块第一次点击文件上传时触发) -->
+<div class="modal-bg" id="uploadConfirmModal">
+  <div class="modal" style="width:420px">
+    <h3>上传前请确认</h3>
+    <p style="font-size:.9rem;color:var(--text);margin-bottom:24px">
+      请确认上传数据不属于公司保密资产。
+    </p>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="uploadConfirmOk">确认</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

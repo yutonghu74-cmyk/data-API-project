@@ -6,10 +6,25 @@
   <title>使用统计 — 数据平台</title>
   <link rel="stylesheet" href="../assets/css/platform.css">
   <style>
+    /* Tabs (与 apply.html 保持一致) */
+    .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+    .tab {
+      padding: 9px 20px; font-size: .9rem; cursor: pointer;
+      border: none; background: none; color: var(--text-muted);
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .tab.active { color: var(--green); border-bottom-color: var(--green); font-weight: 500; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* 顶部卡片 */
     .stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
     .stat-card { background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
     .stat-card .val { font-size: 1.4rem; font-weight: 700; color: var(--text); margin-top: 4px; }
     .stat-card .lbl { font-size: .78rem; color: var(--text-muted); }
+
+    /* 段落标题 */
+    .section-title { font-size: .9rem; font-weight: 600; margin: 22px 0 10px; color: var(--text); }
 
     /* 筛选工具栏 */
     .stats-toolbar {
@@ -75,8 +90,9 @@
     /* 总计行 */
     tfoot td { border-top: 2px solid var(--border); font-weight: 600; background: var(--surface); font-size: .85rem; }
 
-    /* 日趋迷你折线 */
-    .spark-svg { width: 80px; height: 28px; display: block; }
+    /* 占比进度条 */
+    .pct-bar { display: inline-block; width: 80px; height: 6px; background: var(--surface); border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
+    .pct-bar-fill { display: block; height: 100%; background: var(--green); }
 
     /* 趋势弹窗 */
     .trend-modal { width: 600px; max-width: 95vw; }
@@ -87,6 +103,26 @@
 
     .trend-btn { cursor: pointer; color: var(--green); font-size: .82rem; background: none; border: none; padding: 0; }
     .trend-btn:hover { text-decoration: underline; }
+
+    /* 分区 2 趋势图 */
+    .trend-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 4px; }
+    .chart-card { padding: 14px 16px; }
+    .chart-title { font-size: .85rem; color: var(--text); margin-bottom: 8px; font-weight: 500; }
+    .chart-svg-large { width: 100%; height: 160px; }
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .75rem; color: var(--text-muted); margin-top: 6px; }
+    .chart-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+
+    /* 分区 3 排行 */
+    .rank-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+
+    /* 分区 5 异常卡片 */
+    .anomaly-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+    .anomaly-cards .stat-card.warn .val { color: #dc2626; }
+    .anomaly-cards .stat-card.warn { border-color: #fecaca; background: #fef2f2; }
+
+    @media (max-width: 900px) {
+      .trend-grid, .rank-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -107,8 +143,7 @@
       </div>
       <div class="sidebar-children">
         <a href="claude.html" class="sidebar-item">API调用</a>
-        <a href="apply.html"  class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"   class="sidebar-item sidebar-admin" id="keysLink">密钥管理</a>
+        <a href="apply.html"  class="sidebar-item">API管理</a>
         <a href="stats.html"  class="sidebar-item active">使用统计</a>
         <a href="users.html"  class="sidebar-item sidebar-admin" id="usersLink">用户管理</a>
       </div>
@@ -123,56 +158,175 @@
     </div>
     <p class="page-title">使用统计</p>
 
-    <!-- 汇总卡片（管理员） -->
-    <div class="stat-cards" id="summaryCards" style="display:none"></div>
-
-    <!-- 筛选工具栏 -->
-    <div class="stats-toolbar">
-      <input class="f-input" id="searchInput" placeholder="搜索 API名称…">
-      <select class="f-select" id="providerFilter"><option value="">全部供应商</option></select>
-      <button class="clear-btn" id="clearFilter">清空筛选</button>
-      <div class="time-btns" id="timeBtns">
-        <button class="time-btn active" data-days="7">7天</button>
-        <button class="time-btn" data-days="30">30天</button>
-        <button class="time-btn" data-days="90">90天</button>
-        <button class="time-btn" data-days="">全部</button>
-      </div>
+    <!-- Tab 导航 -->
+    <div class="tabs" id="tabBar">
+      <button class="tab active" data-tab="personal">个人看板</button>
+      <button class="tab" data-tab="platform" id="platformTab" style="display:none">平台看板</button>
     </div>
 
-    <!-- 按 API 统计 -->
-    <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px">
-      <div class="table-wrap">
-        <table id="statsTable">
-          <thead>
-            <tr>
-              <th class="sortable" data-col="name">API名称 <span class="sort-icon"></span><button class="funnel-btn" data-col="name" data-type="text">⧩</button><div class="filter-panel" data-col="name"><input placeholder="包含…"><div class="filter-panel-btns"><button class="fp-clear">清除</button><button class="fp-apply btn btn-primary">确定</button></div></div></th>
-              <th class="sortable" data-col="provider">供应商 <span class="sort-icon"></span><button class="funnel-btn" data-col="provider" data-type="text">⧩</button><div class="filter-panel" data-col="provider"><input placeholder="包含…"><div class="filter-panel-btns"><button class="fp-clear">清除</button><button class="fp-apply btn btn-primary">确定</button></div></div></th>
-              <th class="sortable" data-col="total_calls">总调用 <span class="sort-icon"></span><button class="funnel-btn" data-col="total_calls" data-type="num">⧩</button><div class="filter-panel" data-col="total_calls"><input type="number" placeholder="≥ 值"><div class="filter-panel-btns"><button class="fp-clear">清除</button><button class="fp-apply btn btn-primary">确定</button></div></div></th>
-              <th class="sortable" data-col="success_rate">成功率 <span class="sort-icon"></span><button class="funnel-btn" data-col="success_rate" data-type="num">⧩</button><div class="filter-panel" data-col="success_rate"><input type="number" placeholder="≥ %"><div class="filter-panel-btns"><button class="fp-clear">清除</button><button class="fp-apply btn btn-primary">确定</button></div></div></th>
-              <th class="sortable" data-col="total_tokens">Token数 <span class="sort-icon"></span><button class="funnel-btn" data-col="total_tokens" data-type="num">⧩</button><div class="filter-panel" data-col="total_tokens"><input type="number" placeholder="≥ 值"><div class="filter-panel-btns"><button class="fp-clear">清除</button><button class="fp-apply btn btn-primary">确定</button></div></div></th>
-              <th class="sortable" data-col="total_cost">总费用(元) <span class="sort-icon"></span><button class="funnel-btn" data-col="total_cost" data-type="num">⧩</button><div class="filter-panel" data-col="total_cost"><input type="number" placeholder="≥ ¥"><div class="filter-panel-btns"><button class="fp-clear">清除</button><button class="fp-apply btn btn-primary">确定</button></div></div></th>
-              <th class="sortable" data-col="avg_duration_ms">平均耗时 <span class="sort-icon"></span><button class="funnel-btn" data-col="avg_duration_ms" data-type="num">⧩</button><div class="filter-panel" data-col="avg_duration_ms"><input type="number" placeholder="≥ ms"><div class="filter-panel-btns"><button class="fp-clear">清除</button><button class="fp-apply btn btn-primary">确定</button></div></div></th>
-              <th class="sortable" data-col="last_used">最后使用 <span class="sort-icon"></span><button class="funnel-btn" data-col="last_used" data-type="text">⧩</button><div class="filter-panel" data-col="last_used"><input placeholder="如 2026-05"><div class="filter-panel-btns"><button class="fp-clear">清除</button><button class="fp-apply btn btn-primary">确定</button></div></div></th>
-              <th>创建日期 <button class="funnel-btn" data-col="created_at" data-type="daterange">⧩</button><div class="filter-panel" data-col="created_at"><div style="font-size:.76rem;color:var(--text-muted);margin-bottom:4px">起始日期</div><input class="fp-date-from" type="date" style="margin-bottom:6px"><div style="font-size:.76rem;color:var(--text-muted);margin-bottom:4px">结束日期</div><input class="fp-date-to" type="date"><div class="filter-panel-btns" style="margin-top:8px"><button class="fp-clear">清除</button><button class="fp-apply btn btn-primary">确定</button></div></div></th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="statsTbody"></tbody>
-          <tfoot id="statsFoot"></tfoot>
-        </table>
+    <!-- ─────────── 个人看板 ─────────── -->
+    <div class="tab-panel active" id="tab-personal">
+      <p class="section-title">我的概览（今日）</p>
+      <div class="stat-cards" id="meCards">
+        <div class="stat-card"><div class="lbl">今日请求</div><div class="val" id="meTotal">—</div></div>
+        <div class="stat-card"><div class="lbl">今日 Token</div><div class="val" id="meTokens">—</div></div>
+        <div class="stat-card"><div class="lbl">今日费用</div><div class="val" id="meCost">—</div></div>
+        <div class="stat-card"><div class="lbl">成功率</div><div class="val" id="meRate">—</div></div>
       </div>
-    </div>
 
-    <!-- 按用户分组（管理员） -->
-    <div id="userStatsSection" style="display:none">
-      <p style="font-size:.9rem;font-weight:600;margin-bottom:12px;color:var(--text)">按用户统计</p>
-      <div class="card" style="padding:0;overflow:hidden">
+      <p class="section-title">我的调用（按模型）</p>
+      <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px">
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>用户</th><th>调用次数</th><th>Input Token</th><th>Output Token</th><th>总Token</th><th>总费用(元)</th><th>成功次数</th><th>最后使用</th></tr>
+              <tr>
+                <th>模型</th>
+                <th>请求量</th>
+                <th>Input Token</th>
+                <th>Output Token</th>
+                <th>总 Token</th>
+                <th>费用(元)</th>
+                <th>调用占比</th>
+              </tr>
             </thead>
-            <tbody id="userStatsTbody"></tbody>
+            <tbody id="meModelTbody">
+              <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">加载中…</td></tr>
+            </tbody>
+            <tfoot id="meModelFoot"></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <p class="section-title">我的费用（按 API key）</p>
+      <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>API名称</th>
+                <th>供应商</th>
+                <th>子帐号</th>
+                <th>项目</th>
+                <th>总额</th>
+                <th>已花费</th>
+                <th>余额</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody id="meKeysTbody">
+              <tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─────────── 平台看板 (admin) ─────────── -->
+    <div class="tab-panel" id="tab-platform">
+      <!-- 时间范围切换 -->
+      <div class="stats-toolbar" style="justify-content:flex-end">
+        <div class="time-btns" id="timeBtns">
+          <button class="time-btn" data-days="1">今天</button>
+          <button class="time-btn active" data-days="7">7天</button>
+          <button class="time-btn" data-days="30">30天</button>
+          <button class="time-btn" data-days="90">90天</button>
+          <button class="time-btn" data-days="0">总量</button>
+        </div>
+      </div>
+
+      <!-- 分区 1：核心指标 -->
+      <p class="section-title" id="ovSectionTitle">核心指标（近 7 天）</p>
+      <div class="stat-cards" id="platOverview">
+        <div class="stat-card"><div class="lbl">请求量</div><div class="val" id="ovTotal">—</div></div>
+        <div class="stat-card"><div class="lbl">Token</div><div class="val" id="ovTokens">—</div></div>
+        <div class="stat-card"><div class="lbl">成本</div><div class="val" id="ovCost">—</div></div>
+        <div class="stat-card"><div class="lbl">活跃项目</div>
+          <div class="val" id="ovProjects">—</div>
+          <div id="ovProjectsList" style="font-size:.72rem;color:var(--text-muted);margin-top:4px;line-height:1.4;max-height:32px;overflow:hidden"></div>
+        </div>
+        <div class="stat-card"><div class="lbl">活跃用户</div><div class="val" id="ovUsers">—</div></div>
+        <div class="stat-card"><div class="lbl">成功率</div><div class="val" id="ovRate">—</div></div>
+        <div class="stat-card"><div class="lbl">平均响应</div><div class="val" id="ovMs">—</div></div>
+      </div>
+
+      <!-- 分区 2：平台趋势 -->
+      <p class="section-title">平台趋势</p>
+      <div class="trend-grid">
+        <div class="card chart-card">
+          <div class="chart-title">请求量趋势</div>
+          <svg class="chart-svg-large" id="chartCalls" viewBox="0 0 560 160" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="card chart-card">
+          <div class="chart-title">成本趋势（元）</div>
+          <svg class="chart-svg-large" id="chartCost" viewBox="0 0 560 160" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="card chart-card" style="grid-column:1 / -1">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="chart-title" style="margin:0">模型使用趋势（Top 5）</div>
+            <button class="trend-btn" id="modelTrendExpand">展开 ▾</button>
+          </div>
+          <svg class="chart-svg-large" id="chartModel" viewBox="0 0 560 160" preserveAspectRatio="none"></svg>
+          <div id="chartModelLegend" class="chart-legend"></div>
+        </div>
+      </div>
+
+      <!-- 分区 3：调用排行 -->
+      <p class="section-title">调用排行</p>
+      <div class="rank-grid">
+        <div class="card" style="padding:0;overflow:hidden">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px 0">
+            <div class="chart-title" style="margin:0">项目调用排行 (Top 10)</div>
+            <button class="trend-btn" id="rankProjectExpand">展开 ▾</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>项目</th><th>请求量</th><th>Token</th><th>成本(元)</th></tr></thead>
+              <tbody id="rankProjectTbody"><tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:18px">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px 0">
+            <div class="chart-title" style="margin:0">用户调用排行 (Top 10)</div>
+            <button class="trend-btn" id="rankUserExpand">展开 ▾</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>用户</th><th>请求量</th><th>Token</th><th>成本(元)</th></tr></thead>
+              <tbody id="rankUserTbody"><tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:18px">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 分区 4：模型治理 -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:18px 0 8px">
+        <p class="section-title" style="margin:0">模型治理</p>
+        <button class="trend-btn" id="modelGovExpand">展开 ▾</button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>模型</th><th>请求量</th><th>Token</th><th>成本(元)</th><th>成功率</th><th>平均延迟</th></tr></thead>
+            <tbody id="modelGovTbody"><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:18px">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 分区 5：异常监控 -->
+      <p class="section-title">异常监控</p>
+      <div class="anomaly-cards">
+        <div class="stat-card"><div class="lbl">今日失败率</div><div class="val" id="anFailRate">—</div></div>
+        <div class="stat-card"><div class="lbl">今日失败数</div><div class="val" id="anFails">—</div></div>
+        <div class="stat-card"><div class="lbl">超时数 (>10s)</div><div class="val" id="anSlow">—</div></div>
+        <div class="stat-card" id="anGrowthCard"><div class="lbl">今日 vs 昨日</div><div class="val" id="anGrowth">—</div></div>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden;margin-top:14px">
+        <div class="chart-title" style="padding:12px 14px 0">最近 10 条失败调用</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>时间</th><th>用户</th><th>模型</th><th>耗时</th><th>错误</th></tr></thead>
+            <tbody id="anFailTbody"><tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:18px">无</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -180,415 +334,40 @@
   </div>
 </div>
 
-<!-- 趋势弹窗 -->
-<div class="modal-bg" id="trendModal">
-  <div class="modal trend-modal">
-    <button class="trend-close" id="trendClose">×</button>
-    <h3 id="trendTitle">调用趋势</h3>
-    <svg class="chart-svg" id="trendSvg" viewBox="0 0 560 100" preserveAspectRatio="none"></svg>
-    <div class="chart-label" id="trendLabel"></div>
-    <div id="trendStats" style="display:flex;gap:20px;font-size:.82rem;color:var(--text-muted)"></div>
+<!-- 模型使用趋势 展开弹窗(Top 10) -->
+<div class="modal-bg" id="modelTrendExpandBg">
+  <div class="modal" style="width:920px;max-width:96vw">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 id="modelTrendExpandTitle" style="margin:0">模型使用趋势 — Top 10</h3>
+      <button class="trend-close" id="modelTrendExpandClose">×</button>
+    </div>
+    <p style="font-size:.78rem;color:var(--text-muted);margin:0 0 10px" id="modelTrendExpandHint"></p>
+    <svg id="chartModelExpand" viewBox="0 0 880 320" preserveAspectRatio="none" style="width:100%;height:340px"></svg>
+    <div id="chartModelExpandLegend" class="chart-legend" style="margin-top:8px"></div>
   </div>
 </div>
 
-<script type="module">
-import { initSidebar } from '../assets/js/sidebar.js';
-import { requireLogin, refreshUser, authHeaders, logout } from '../assets/js/auth.js';
-if (!requireLogin()) throw new Error('redirect');
+<!-- 调用排行展开弹窗 (项目/用户 共用) -->
+<div class="modal-bg" id="rankExpandBg">
+  <div class="modal" style="width:760px;max-width:95vw">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 id="rankExpandTitle" style="margin:0">调用排行 — 全部</h3>
+      <button class="trend-close" id="rankExpandClose">×</button>
+    </div>
+    <p style="font-size:.78rem;color:var(--text-muted);margin:0 0 10px" id="rankExpandHint"></p>
+    <div style="max-height:60vh;overflow:auto;border:1px solid var(--border);border-radius:var(--radius)">
+      <table style="width:100%">
+        <thead>
+          <tr id="rankExpandHead"></tr>
+        </thead>
+        <tbody id="rankExpandTbody">
+          <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
-initSidebar();
-
-const user = await refreshUser();
-if (!user) { window.location.href = '/pages/login.html'; throw new Error('not logged in'); }
-
-const isAdmin = user.role === 'admin';
-const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
-
-document.getElementById('userBar').innerHTML = `
-  <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
-  <button class="logout" id="logoutBtn">退出</button>`;
-document.getElementById('logoutBtn').addEventListener('click', () => logout());
-
-// ── 状态 ─────────────────────────────────────────────────
-let rawStats      = [];
-let sortCol       = '';
-let sortAsc       = true;
-let searchText    = '';
-let filterProvider = '';
-let currentDays   = '7';
-let colFilters    = {};  // { col: { type, value } }
-
-// ── 时间范围按钮 ──────────────────────────────────────────
-document.querySelectorAll('.time-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentDays = btn.dataset.days;
-    fetchStats();
-  });
-});
-
-// ── 搜索框 ────────────────────────────────────────────────
-document.getElementById('searchInput').addEventListener('input', e => {
-  searchText = e.target.value.trim().toLowerCase();
-  renderTable();
-});
-
-// ── 供应商下拉筛选 ────────────────────────────────────────
-document.getElementById('providerFilter').addEventListener('change', e => {
-  filterProvider = e.target.value;
-  renderTable();
-});
-
-// ── 漏斗面板逻辑 ─────────────────────────────────────────
-function closeAllPanels() {
-  document.querySelectorAll('.filter-panel.open').forEach(p => p.classList.remove('open'));
-}
-
-document.querySelectorAll('.funnel-btn').forEach(btn => {
-  btn.addEventListener('click', e => {
-    e.stopPropagation();
-    const col   = btn.dataset.col;
-    const panel = document.querySelector(`.filter-panel[data-col="${col}"]`);
-    const isOpen = panel.classList.contains('open');
-    closeAllPanels();
-    if (!isOpen) panel.classList.add('open');
-  });
-});
-
-// 面板内阻止冒泡（防止点输入框时关闭）
-document.querySelectorAll('.filter-panel').forEach(panel => {
-  panel.addEventListener('click', e => e.stopPropagation());
-
-  const col  = panel.dataset.col;
-  const btn  = document.querySelector(`.funnel-btn[data-col="${col}"]`);
-  const type = btn?.dataset.type || 'text';
-  const inp  = panel.querySelector('input');
-
-  // 确定
-  panel.querySelector('.fp-apply').addEventListener('click', () => {
-    if (type === 'daterange') {
-      const from = panel.querySelector('.fp-date-from')?.value || '';
-      const to   = panel.querySelector('.fp-date-to')?.value   || '';
-      if (from || to) {
-        colFilters[col] = { type, from, to };
-        btn?.classList.add('active');
-      } else {
-        delete colFilters[col];
-        btn?.classList.remove('active');
-      }
-    } else {
-      const val = inp?.value.trim() || '';
-      if (val) {
-        colFilters[col] = { type, value: val };
-        btn?.classList.add('active');
-      } else {
-        delete colFilters[col];
-        btn?.classList.remove('active');
-      }
-    }
-    closeAllPanels();
-    renderTable();
-  });
-
-  // 清除
-  panel.querySelector('.fp-clear').addEventListener('click', () => {
-    if (type === 'daterange') {
-      panel.querySelector('.fp-date-from').value = '';
-      panel.querySelector('.fp-date-to').value   = '';
-    } else {
-      inp.value = '';
-    }
-    delete colFilters[col];
-    btn?.classList.remove('active');
-    closeAllPanels();
-    renderTable();
-  });
-
-  // Enter 确认（仅非 daterange）
-  inp?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') panel.querySelector('.fp-apply').click();
-  });
-});
-
-// 点击页面其他区域关闭面板
-document.addEventListener('click', closeAllPanels);
-
-// ── 清空筛选 ──────────────────────────────────────────────
-document.getElementById('clearFilter').addEventListener('click', () => {
-  searchText = ''; filterProvider = ''; colFilters = {};
-  document.getElementById('searchInput').value = '';
-  document.getElementById('providerFilter').value = '';
-  document.querySelectorAll('.filter-panel input, .fp-date-from, .fp-date-to').forEach(inp => inp.value = '');
-  document.querySelectorAll('.funnel-btn.active').forEach(b => b.classList.remove('active'));
-  renderTable();
-});
-
-// ── 列排序 ────────────────────────────────────────────────
-document.querySelectorAll('th.sortable').forEach(th => {
-  th.addEventListener('click', () => {
-    const col = th.dataset.col;
-    if (sortCol === col) sortAsc = !sortAsc;
-    else { sortCol = col; sortAsc = true; }
-    document.querySelectorAll('th.sortable').forEach(t => t.classList.remove('sort-asc','sort-desc'));
-    th.classList.add(sortAsc ? 'sort-asc' : 'sort-desc');
-    renderTable();
-  });
-});
-
-// ── 数据获取 ──────────────────────────────────────────────
-async function fetchStats() {
-  const tbody = document.getElementById('statsTbody');
-  tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">加载中…</td></tr>';
-  try {
-    if (isAdmin) {
-      const url = currentDays
-        ? `http://localhost:8000/admin/stats?days=${currentDays}`
-        : `http://localhost:8000/admin/stats`;
-      const res = await fetch(url, { headers: ADMIN_HEADERS });
-      rawStats = await res.json().catch(() => []);
-      renderSummaryCards(rawStats);
-      loadUserStats();
-    } else {
-      const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
-      const approved = await res.json().catch(() => []);
-      rawStats = approved.map(c => ({
-        config_id: c.id, name: c.name, provider: c.provider,
-        total_calls: null, success_rate: null, input_tokens: null,
-        output_tokens: null, total_cost: null, avg_duration_ms: null,
-        total_tokens: null, last_used: null,
-      }));
-    }
-  } catch(e) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#dc2626;padding:32px">加载失败</td></tr>';
-    return;
-  }
-  renderTable();
-}
-
-// ── 汇总卡片 ──────────────────────────────────────────────
-function renderSummaryCards(list) {
-  if (!list.length) { document.getElementById('summaryCards').style.display = 'none'; return; }
-  const total  = list.reduce((s, r) => s + (r.total_calls  || 0), 0);
-  const tokens = list.reduce((s, r) => s + (r.total_tokens || 0), 0);
-  const cost   = list.reduce((s, r) => s + (r.total_cost   || 0), 0);
-  const okArr  = list.filter(r => r.total_calls > 0);
-  const okRate = okArr.length ? okArr.reduce((s, r) => s + r.success_rate, 0) / okArr.length : 0;
-  const avgMs  = okArr.length ? okArr.reduce((s, r) => s + r.avg_duration_ms, 0) / okArr.length : 0;
-  const label  = currentDays ? `近 ${currentDays} 天` : '全部';
-  document.getElementById('summaryCards').style.display = 'grid';
-  document.getElementById('summaryCards').innerHTML = `
-    <div class="stat-card"><div class="lbl">总调用（${label}）</div><div class="val">${total.toLocaleString()}</div></div>
-    <div class="stat-card"><div class="lbl">平均成功率</div><div class="val">${okRate.toFixed(1)}%</div></div>
-    <div class="stat-card"><div class="lbl">累计 Token</div><div class="val">${tokens.toLocaleString()}</div></div>
-    <div class="stat-card"><div class="lbl">总费用</div><div class="val">¥${cost\.toFixed(2)}</div></div>
-    <div class="stat-card"><div class="lbl">平均耗时</div><div class="val">${avgMs.toFixed(0)} ms</div></div>`;
-}
-
-// ── 填充供应商下拉（数据加载后） ─────────────────────────
-function refreshProviderFilter() {
-  const sel = document.getElementById('providerFilter');
-  const cur = sel.value;
-  const providers = [...new Set(rawStats.map(s => s.provider))].sort();
-  sel.innerHTML = '<option value="">全部供应商</option>' +
-    providers.map(p => `<option value="${p}"${p === cur ? ' selected' : ''}>${p}</option>`).join('');
-}
-
-// ── 应用筛选 & 排序，返回结果集 ───────────────────────────
-function getFiltered() {
-  let list = rawStats;
-  if (searchText) {
-    list = list.filter(s => s.name.toLowerCase().includes(searchText));
-  }
-  if (filterProvider) {
-    list = list.filter(s => s.provider === filterProvider);
-  }
-  // 列筛选
-  for (const [col, f] of Object.entries(colFilters)) {
-    if (f.type === 'num') {
-      const threshold = parseFloat(f.value);
-      if (!isNaN(threshold))
-        list = list.filter(s => typeof s[col] === 'number' && s[col] >= threshold);
-    } else if (f.type === 'daterange') {
-      const from = f.from || '';
-      const to   = f.to   || '';
-      list = list.filter(s => {
-        const d = (s[col] || '').slice(0, 10);
-        if (from && d < from) return false;
-        if (to   && d > to)   return false;
-        return true;
-      });
-    } else {
-      const q = f.value.toLowerCase();
-      list = list.filter(s => String(s[col] ?? '').toLowerCase().includes(q));
-    }
-  }
-  if (sortCol) {
-    list = [...list].sort((a, b) => {
-      const va = a[sortCol] ?? -Infinity;
-      const vb = b[sortCol] ?? -Infinity;
-      if (typeof va === 'number' && typeof vb === 'number')
-        return sortAsc ? va - vb : vb - va;
-      return sortAsc
-        ? String(va).localeCompare(String(vb))
-        : String(vb).localeCompare(String(va));
-    });
-  }
-  return list;
-}
-
-// ── 渲染主表格 ────────────────────────────────────────────
-function renderTable() {
-  refreshProviderFilter();
-  const filtered = getFiltered();
-  const tbody = document.getElementById('statsTbody');
-  const tfoot = document.getElementById('statsFoot');
-
-  if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:32px">暂无数据</td></tr>';
-    tfoot.innerHTML = '';
-    return;
-  }
-
-  const fmt = v => typeof v === 'number' ? v.toLocaleString() : '—';
-
-  tbody.innerHTML = '';
-  filtered.forEach(s => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${s.name}</td>
-      <td>${s.provider}</td>
-      <td>${fmt(s.total_calls)}</td>
-      <td>${typeof s.success_rate === 'number' ? s.success_rate + '%' : '—'}</td>
-      <td>${fmt(s.total_tokens)}</td>
-      <td>${typeof s.total_cost === 'number' ? '¥' + s.total_cost\.toFixed(2) : '—'}</td>
-      <td>${typeof s.avg_duration_ms === 'number' ? s.avg_duration_ms + ' ms' : '—'}</td>
-      <td style="font-size:.82rem;color:var(--text-muted)">${s.last_used ? s.last_used.slice(0,16).replace('T',' ') : '—'}</td>
-      <td style="font-size:.82rem;color:var(--text-muted)">${s.created_at ? s.created_at.slice(0,10) : '—'}</td>
-      <td>${isAdmin ? `<button class="trend-btn" data-cid="${s.config_id}" data-name="${s.name}">趋势</button>` : '—'}</td>`;
-    tbody.appendChild(tr);
-  });
-
-  // 趋势弹窗按钮
-  tbody.querySelectorAll('.trend-btn').forEach(btn => {
-    btn.addEventListener('click', () => openTrendModal(btn.dataset.cid, btn.dataset.name));
-  });
-
-  renderTotals(filtered);
-}
-
-// ── 总计行 ────────────────────────────────────────────────
-function renderTotals(list) {
-  const nums = list.filter(s => typeof s.total_calls === 'number');
-  if (!nums.length) { document.getElementById('statsFoot').innerHTML = ''; return; }
-  const tot_calls  = nums.reduce((s, r) => s + (r.total_calls  || 0), 0);
-  const tot_tokens = nums.reduce((s, r) => s + (r.total_tokens || 0), 0);
-  const tot_cost   = nums.reduce((s, r) => s + (r.total_cost   || 0), 0);
-  const ok_arr     = nums.filter(r => r.total_calls > 0);
-  const avg_rate   = ok_arr.length ? ok_arr.reduce((s, r) => s + r.success_rate, 0) / ok_arr.length : 0;
-  const avg_ms     = ok_arr.length ? ok_arr.reduce((s, r) => s + r.avg_duration_ms, 0) / ok_arr.length : 0;
-  document.getElementById('statsFoot').innerHTML = `<tr>
-    <td>合计 (${list.length} 项)</td>
-    <td>—</td>
-    <td>${tot_calls.toLocaleString()}</td>
-    <td>${avg_rate.toFixed(1)}%</td>
-    <td>${tot_tokens.toLocaleString()}</td>
-    <td>¥${tot_cost\.toFixed(2)}</td>
-    <td>${avg_ms.toFixed(0)} ms</td>
-    <td>—</td><td>—</td><td>—</td>
-  </tr>`;
-}
-
-
-function getLastNDays(n) {
-  return Array.from({length: n}, (_, i) => {
-    const d = new Date(); d.setDate(d.getDate() - (n - 1) + i);
-    return d.toISOString().slice(0, 10);
-  });
-}
-
-// ── 趋势弹窗 ─────────────────────────────────────────────
-async function openTrendModal(configId, name) {
-  document.getElementById('trendTitle').textContent = `调用趋势 — ${name}`;
-  document.getElementById('trendSvg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="#9ca3af" font-size="12">加载中…</text>';
-  document.getElementById('trendLabel').innerHTML = '';
-  document.getElementById('trendStats').innerHTML = '';
-  document.getElementById('trendModal').classList.add('open');
-
-  const days = currentDays || 30;
-  try {
-    const res = await fetch(
-      `http://localhost:8000/admin/stats/${configId}/daily?days=${days}`,
-      { headers: ADMIN_HEADERS });
-    const data = await res.json().catch(() => []);
-    drawTrendChart(data, days);
-  } catch(e) {
-    document.getElementById('trendSvg').innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="#dc2626" font-size="12">加载失败</text>';
-  }
-}
-
-function drawTrendChart(data, days) {
-  const pts  = getLastNDays(Math.min(Number(days) || 30, 90));
-  const map  = Object.fromEntries(data.map(d => [d.day, d.count]));
-  const vals = pts.map(d => map[d] || 0);
-  const max  = Math.max(...vals, 1);
-  const total = vals.reduce((s, v) => s + v, 0);
-  const W = 560, H = 100, pad = 14;
-  const xs = vals.map((_, i) => pad + i * ((W - pad * 2) / Math.max(vals.length - 1, 1)));
-  const ys = vals.map(v => H - pad - (v / max) * (H - pad * 2));
-  const polyPts = xs.map((x, i) => `${x},${ys[i]}`).join(' ');
-  const svg = document.getElementById('trendSvg');
-  svg.innerHTML = `
-    <polyline points="${polyPts}" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round"/>
-    ${xs.map((x,i) => vals[i] > 0 ? `<circle cx="${x}" cy="${ys[i]}" r="3" fill="var(--green)"/>` : '').join('')}`;
-
-  // 标签：只显示首尾和中间几个，避免拥挤
-  const step = Math.ceil(pts.length / 7);
-  document.getElementById('trendLabel').innerHTML = pts
-    .filter((_, i) => i % step === 0 || i === pts.length - 1)
-    .map(d => `<span>${d.slice(5)}</span>`).join('');
-
-  document.getElementById('trendStats').innerHTML = `
-    <span>共 ${total} 次调用</span>
-    <span>最高单日 ${max} 次</span>
-    <span>时间范围：近 ${pts.length} 天</span>`;
-}
-
-document.getElementById('trendClose').addEventListener('click',
-  () => document.getElementById('trendModal').classList.remove('open'));
-document.getElementById('trendModal').addEventListener('click', e => {
-  if (e.target === document.getElementById('trendModal'))
-    document.getElementById('trendModal').classList.remove('open');
-});
-
-// ── 按用户统计 ────────────────────────────────────────────
-async function loadUserStats() {
-  if (!isAdmin) return;
-  document.getElementById('userStatsSection').style.display = 'block';
-  const tbody = document.getElementById('userStatsTbody');
-  try {
-    const res = await fetch('http://localhost:8000/admin/stats/by-user', { headers: ADMIN_HEADERS });
-    const list = await res.json().catch(() => []);
-    if (!list.length) {
-      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px">暂无数据</td></tr>';
-      return;
-    }
-    tbody.innerHTML = list.map(u => `<tr>
-      <td>${u.username}</td>
-      <td>${u.total_calls.toLocaleString()}</td>
-      <td>${(u.input_tokens||0).toLocaleString()}</td>
-      <td>${(u.output_tokens||0).toLocaleString()}</td>
-      <td>${(u.total_tokens||0).toLocaleString()}</td>
-      <td>¥${(u.total_cost||0)\.toFixed(2)}</td>
-      <td>${u.success_count||0}</td>
-      <td style="font-size:.82rem;color:var(--text-muted)">${u.last_used ? u.last_used.slice(0,16).replace('T',' ') : '—'}</td>
-    </tr>`).join('');
-  } catch(e) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#dc2626;padding:24px">加载失败</td></tr>';
-  }
-}
-
-fetchStats();
-</script>
+<script type="module" src="../assets/js/stats-page.js"></script>
 </body>
 </html>

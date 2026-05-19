@@ -24,6 +24,16 @@ export function requireLogin() {
   return true;
 }
 
+// 渲染右上角用户信息
+export function renderUserBar(user) {
+  const u = user || getUser();
+  const el = document.getElementById('userBar');
+  if (!el || !u) return;
+  const label = u.role === 'admin' ? `${u.username}（管理员）` : u.username;
+  el.innerHTML = `<span class="username">${label}</span><button class="logout" id="logoutBtn">退出</button>`;
+  document.getElementById('logoutBtn').addEventListener('click', () => logout());
+}
+
 // 从服务器刷新用户信息（确保 role 最新），返回最新 user 对象
 export async function refreshUser() {
   try {
@@ -33,6 +43,8 @@ export async function refreshUser() {
     if (!res.ok) return getUser();
     const user = await res.json();
     localStorage.setItem(USER_KEY, JSON.stringify(user));
+    document.body.classList.toggle('is-admin', user.role === 'admin');
+    renderUserBar(user);
     return user;
   } catch {
     return getUser();
@@ -78,14 +90,4 @@ export async function login(username, password) {
 export function logout() {
   clearSession();
   window.location.href = '/pages/login.html';
-}
-
-// 渲染面包屑右侧用户信息
-export function renderUserBar() {
-  const user = getUser();
-  const el = document.getElementById('userBar');
-  if (!el || !user) return;
-  el.innerHTML = `
-    <span class="username">${user.username}</span>
-    <button class="logout" onclick="import('/assets/js/auth.js').then(m=>m.logout())">退出</button>`;
 }

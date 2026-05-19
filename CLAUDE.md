@@ -2,6 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+# Development Rules
+
+- Always write tests first
+- Use TDD workflow
+- Never modify existing logic without tests
+- Run tests after every implementation
+- Keep tests isolated
+- Prefer integration tests for APIs
+
+
+# Git 规范
+每次提交必须清晰说明改动
+使用 feat/fix/refactor 格式
+feat: 新功能
+fix: 修复bug
+refactor: 重构代码
+
+# Git 提交规范
+使用 feat/fix/docs/style/refactor/test/chore 格式
+
 ## 项目简介
 
 纯静态前端 + Python 代理的第三方 API 调用平台。无构建工具，直接用浏览器打开 HTML 文件即可运行前端。后端仅在需要代理（如 Claude API）时才需要启动。

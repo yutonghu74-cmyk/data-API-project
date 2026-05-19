@@ -75,6 +75,14 @@
     .session-menu-item.danger { color: #dc2626; }
     .session-menu-item.danger:hover { background: #fee2e2; }
 
+    /* ── 拖拽手柄 ── */
+    .resize-handle {
+      width: 4px; cursor: col-resize; background: transparent;
+      flex-shrink: 0; position: relative; z-index: 10;
+      transition: background .15s;
+    }
+    .resize-handle:hover, .resize-handle.active { background: var(--green); }
+
     /* ── 右侧聊天区 ── */
     .chat-main {
       flex: 1; display: flex; flex-direction: column; min-width: 0;
@@ -89,19 +97,44 @@
     .messages {
       flex: 1; overflow-y: auto; padding: 20px 24px;
       display: flex; flex-direction: column; gap: 16px;
-      background: var(--surface);
+      background: #fff;
+      align-items: center;
+    }
+    .messages > * {
+      width: 100%; max-width: 900px;
     }
     .bubble {
-      max-width: 75%; padding: 10px 14px; border-radius: 14px;
+      max-width: 100%; padding: 10px 14px; border-radius: 14px;
       font-size: .92rem; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
     }
-    .bubble-user { background: var(--green); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
-    .bubble-assistant { background: #fff; border: 1px solid var(--border); align-self: flex-start; border-bottom-left-radius: 4px; }
+    .bubble-user { background: rgb(242,242,242); color: var(--text); align-self: flex-end; border-bottom-right-radius: 4px; margin-left: auto; }
+    .bubble-assistant { background: #fff; border: 1px solid var(--border); align-self: flex-start; border-bottom-left-radius: 4px; margin-right: auto; }
     .bubble-error { background: #fee2e2; border:1px solid #fecaca; color:#dc2626; align-self:flex-start; border-radius:var(--radius); font-size:.85rem; }
     .retry-btn { margin-top:6px; padding:3px 10px; font-size:.78rem; background:#fff; border:1px solid #fecaca; color:#dc2626; border-radius:4px; cursor:pointer; }
     .retry-btn:hover { background:#fee2e2; }
+    .bubble-model-tag { font-size:.72rem; color:var(--text-muted); margin-top:4px; align-self:flex-start; padding-left:2px; }
     .cursor::after { content:'▋'; animation:blink .7s step-end infinite; }
     @keyframes blink { 50% { opacity:0; } }
+
+    /* ── 气泡内 Markdown 渲染 ── */
+    .bubble img { max-height: 200px; max-width: 100%; border-radius: 6px; cursor: zoom-in; display: block; margin: 4px 0; }
+    .bubble p { margin: 0 0 8px; }
+    .bubble p:last-child { margin-bottom: 0; }
+    .bubble ul, .bubble ol { margin: 4px 0 8px; padding-left: 22px; }
+    .bubble li { margin: 2px 0; }
+    .bubble pre { background:#1e1e1e; color:#e6e6e6; padding:10px 12px; border-radius:6px; overflow-x:auto; font-size:.82rem; line-height:1.5; margin:6px 0; }
+    .bubble pre code { background:none; padding:0; color:inherit; font-family:Consolas,Monaco,monospace; }
+    .bubble code { background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 3px; font-family: Consolas,Monaco,monospace; font-size: .88em; }
+    .bubble-user code { background: rgba(255,255,255,.18); }
+    .bubble table { border-collapse: collapse; margin: 6px 0; font-size: .85rem; }
+    .bubble th, .bubble td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+    .bubble th { background: var(--surface); font-weight: 600; }
+    .bubble blockquote { margin: 6px 0; padding: 4px 10px; border-left: 3px solid var(--border); color: var(--text-muted); }
+    .bubble a { color: var(--green); text-decoration: underline; }
+    .bubble-user a { color: #fff; }
+    .bubble h1, .bubble h2, .bubble h3, .bubble h4 { margin: 10px 0 6px; font-weight: 600; }
+    .bubble h1 { font-size: 1.15rem; } .bubble h2 { font-size: 1.08rem; }
+    .bubble h3 { font-size: 1rem; } .bubble h4 { font-size: .95rem; }
 
     /* ── 图片缩略图 ── */
     .thumb-wrap {
@@ -127,9 +160,9 @@
     .attachment-tag button:hover { color:#dc2626; }
 
     /* ── 输入区 ── */
-    .input-area { padding: 10px 16px; border-top: 1px solid var(--border); background: #fff; }
-    .attachments-row { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
-    .input-row { display:flex; gap:8px; align-items:flex-end; }
+    .input-area { padding: 10px 16px; border-top: 1px solid var(--border); background: #fff; display:flex; flex-direction:column; align-items:center; }
+    .attachments-row { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; width:100%; max-width:900px; }
+    .input-row { display:flex; gap:8px; align-items:flex-end; width:100%; max-width:900px; }
     .input-row textarea { flex:1; resize:none; height:44px; line-height:1.5; font-family:var(--font); }
 
     .empty-hint { color:var(--text-muted); font-size:.85rem; text-align:center; margin:auto; }
@@ -137,59 +170,6 @@
     .no-api-hint a { color:var(--green); }
     .drag-over { outline: 2px dashed var(--green); outline-offset: -4px; }
 
-    /* ── 脚本编辑器 ──────────────────────────────────────── */
-    #panel-script { height: calc(100vh - 148px); }
-    .script-layout { display:flex; height:100%; }
-    .script-left {
-      width:50%; min-width:300px; display:flex; flex-direction:column;
-      border-right:1px solid var(--border); padding:10px; gap:8px; overflow:hidden;
-    }
-    .script-right { flex:1; display:flex; flex-direction:column; min-width:0; }
-    .script-file-drop {
-      border:2px dashed var(--border); border-radius:var(--radius);
-      padding:8px 14px; cursor:pointer; text-align:center;
-      font-size:.83rem; color:var(--text-muted); transition:border-color .15s;
-    }
-    .script-file-drop:hover,.script-file-drop.dragover {
-      border-color:var(--green); color:var(--green); background:var(--green-bg);
-    }
-    .script-config { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; flex-shrink:0; }
-    .script-config .form-group label { font-size:.74rem; }
-    .script-editor-container {
-      flex:1; min-height:0; border:1px solid var(--border);
-      border-radius:var(--radius); overflow:hidden;
-    }
-    .script-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; padding-top:2px; }
-    .script-out-tabs { display:flex; border-bottom:1px solid var(--border); background:#fff; flex-shrink:0; }
-    .script-out-tab {
-      padding:8px 16px; font-size:.85rem; cursor:pointer; border:none; background:none;
-      color:var(--text-muted); border-bottom:2px solid transparent;
-    }
-    .script-out-tab.active { color:var(--green); border-bottom-color:var(--green); font-weight:500; }
-    .script-out-panel { display:none; flex:1; overflow:hidden; flex-direction:column; }
-    .script-out-panel.active { display:flex; }
-    .script-log {
-      flex:1; overflow-y:auto; padding:12px 16px;
-      font-family:monospace; font-size:.82rem; line-height:1.6;
-      background:var(--surface); white-space:pre-wrap; word-break:break-word;
-    }
-    .log-stdout { color:var(--text); }
-    .log-stderr { color:#e06c75; }
-    .log-error  { color:#dc2626; }
-    .log-info   { color:#6b7280; font-style:italic; }
-    .script-log img   { max-width:100%; border-radius:6px; margin:4px 0; cursor:zoom-in; display:block; }
-    .script-log video { max-width:100%; border-radius:6px; margin:4px 0; display:block; }
-    .script-file-badge {
-      background:var(--green); color:#fff; border-radius:10px;
-      font-size:.7rem; padding:0 5px; margin-left:4px; min-width:16px;
-      display:inline-flex; align-items:center; justify-content:center;
-    }
-    .result-file-item {
-      display:flex; align-items:center; gap:10px;
-      padding:10px 14px; border-bottom:1px solid var(--border); font-size:.83rem;
-    }
-    .result-file-item .file-name { flex:1; font-family:monospace; word-break:break-all; }
-    .result-file-item .file-size { color:var(--text-muted); font-size:.75rem; flex-shrink:0; }
 
     /* 安全提示悬浮条（与顶栏平行，居中，不撑满宽度） */
     .security-banner {
@@ -203,12 +183,6 @@
       z-index: 110; white-space: nowrap;
     }
     .security-banner .icon { font-size: .9rem; flex-shrink: 0; }
-    .security-banner .close-btn {
-      background: none; border: none; cursor: pointer;
-      color: #b45309; font-size: 1rem; padding: 0 0 0 6px; line-height: 1;
-      opacity: .7; flex-shrink: 0;
-    }
-    .security-banner .close-btn:hover { opacity: 1; }
 
     /* 图片放大灯箱 */
     .lightbox {
@@ -231,17 +205,16 @@
     <div class="session-menu-item" id="menuRename">✏️ 重命名</div>
     <div class="session-menu-item danger" id="menuDelete">🗑️ 删除</div>
   </div>
-  <!-- Monaco Editor（懒加载，进入脚本 Tab 时初始化）-->
-  <script>var require = { paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } };</script>
-  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+  <!-- Markdown 渲染（轻量，仅 ~30KB） -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 </head>
 <body>
 
 <!-- 安全提示横幅 -->
 <div class="security-banner" id="securityBanner">
   <span class="icon">⚠️</span>
-  <span class="text">注意信息安全：请勿在对话中输入账号密码、身份证号、银行卡号等敏感信息。</span>
-  <button class="close-btn" id="bannerClose" title="关闭">×</button>
+  <span class="text">注意信息安全，请勿提交公司保密资产</span>
 </div>
 
 <!-- 顶部固定导航栏 -->
@@ -255,8 +228,7 @@
       </div>
       <div class="sidebar-children">
         <a href="claude.html"  class="sidebar-item active">API调用</a>
-        <a href="apply.html"   class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item sidebar-admin" id="keysLink">密钥管理</a>
+        <a href="apply.html"   class="sidebar-item">API管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
         <a href="users.html"   class="sidebar-item sidebar-admin" id="usersLink">用户管理</a>
       </div>
@@ -279,7 +251,6 @@
     <div class="sub-tabs">
       <button class="sub-tab active" data-panel="chat">在线使用</button>
       <button class="sub-tab" data-panel="batch">批量处理</button>
-      <button class="sub-tab" data-panel="script">脚本</button>
     </div>
 
     <!-- ① 在线使用（左历史 + 右聊天） -->
@@ -287,28 +258,34 @@
       <div class="chat-layout">
 
         <!-- 左：会话历史 -->
-        <div class="session-sidebar">
+        <div class="session-sidebar" id="sessionSidebar">
           <div class="session-sidebar-head">
             <button class="new-chat-btn" id="newChatBtn">＋ 新对话</button>
           </div>
           <div class="session-list" id="sessionList"></div>
         </div>
 
+        <!-- 拖拽手柄 -->
+        <div class="resize-handle" id="resizeHandle"></div>
+
         <!-- 右：聊天主区 -->
         <div class="chat-main">
-          <!-- 配置栏 -->
+          <!-- 配置栏（可输入模糊匹配） -->
           <div class="config-bar">
             <div class="form-group">
               <label>供应商</label>
-              <select id="providerSelect"><option value="">— 请选择 —</option></select>
+              <input id="providerInput" list="providerList" placeholder="输入或选择供应商" autocomplete="off">
+              <datalist id="providerList"></datalist>
             </div>
             <div class="form-group">
               <label>API名称</label>
-              <select id="configSelect"><option value="">— 请选择 —</option></select>
+              <input id="configInput" list="configList" placeholder="输入或选择 API 名称" autocomplete="off">
+              <datalist id="configList"></datalist>
             </div>
             <div class="form-group">
               <label>模型</label>
-              <select id="modelSelect"><option value="">— 请选择 —</option></select>
+              <input id="modelInput" list="modelList" placeholder="输入或选择模型" autocomplete="off">
+              <datalist id="modelList"></datalist>
             </div>
           </div>
 
@@ -333,75 +310,6 @@
       </div>
     </div>
 
-    <!-- ③ 脚本编辑器 -->
-    <div class="sub-panel" id="panel-script">
-      <div class="script-layout">
-        <!-- 左：文件 + 配置 + 编辑器 -->
-        <div class="script-left">
-          <div id="scriptFileArea">
-            <input type="file" id="scriptFileInput"
-                   accept=".parquet,.json,.csv,.xlsx,.xls" style="display:none">
-            <div class="script-file-drop" id="scriptFileDrop">
-              <div>📂 拖拽或点击上传数据文件</div>
-              <div style="font-size:.73rem;color:var(--text-muted)">.parquet / .json / .csv / .xlsx</div>
-            </div>
-            <div id="scriptFileInfo" style="display:none;align-items:center;padding:6px 2px;gap:8px">
-              <span id="scriptFileName" style="font-size:.82rem;font-weight:500"></span>
-              <span id="scriptFileStats" style="font-size:.75rem;color:var(--text-muted)"></span>
-              <button class="btn btn-secondary" id="scriptFileClear"
-                      style="padding:2px 8px;font-size:.75rem">✕</button>
-            </div>
-          </div>
-          <div class="script-config">
-            <div class="form-group" style="margin:0">
-              <label>供应商</label>
-              <select id="scriptProviderSel"><option value="">— 请选择 —</option></select>
-            </div>
-            <div class="form-group" style="margin:0">
-              <label>API名称</label>
-              <select id="scriptConfigSel"><option value="">— 请选择 —</option></select>
-            </div>
-            <div class="form-group" style="margin:0">
-              <label>模型</label>
-              <select id="scriptModelSel"><option value="">— 请选择 —</option></select>
-            </div>
-          </div>
-          <div id="scriptEditorContainer" class="script-editor-container"></div>
-          <div class="script-actions">
-            <button class="btn btn-primary"   id="scriptRunBtn">▶ 运行</button>
-            <button class="btn btn-secondary" id="scriptStopBtn" style="display:none">■ 停止</button>
-            <button class="btn btn-secondary" id="scriptClearBtn">🗑 清空输出</button>
-            <span id="scriptTimer" style="font-size:.8rem;color:var(--text-muted)"></span>
-          </div>
-        </div>
-        <!-- 右：输出区 -->
-        <div class="script-right">
-          <div class="script-out-tabs">
-            <button class="script-out-tab active" data-out="log">运行日志</button>
-            <button class="script-out-tab" data-out="files">
-              结果文件
-              <span id="scriptFileBadge" class="script-file-badge" style="display:none"></span>
-            </button>
-          </div>
-          <div class="script-out-panel active" id="scriptOutLog">
-            <div class="script-log" id="scriptLog">
-              <span style="color:var(--text-muted);font-size:.82rem">运行后输出将显示在这里</span>
-            </div>
-          </div>
-          <div class="script-out-panel" id="scriptOutFiles">
-            <div id="scriptResultFiles" style="flex:1;overflow-y:auto">
-              <p style="color:var(--text-muted);font-size:.82rem;padding:16px">暂无结果文件</p>
-            </div>
-            <div id="scriptDownloadAll" style="display:none;padding:8px 12px;border-top:1px solid var(--border)">
-              <button class="btn btn-primary" id="scriptDlAllBtn" style="font-size:.82rem">
-                ↓ 打包下载全部
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- ② 批量处理 -->
     <div class="sub-panel" id="panel-batch">
       <iframe src="batch.html?embed=1" id="batchFrame"
@@ -419,34 +327,62 @@ import { streamChat, fetchModels } from '../assets/js/stream.js';
 if (!requireLogin()) throw new Error('redirect');
 initSidebar();
 
-// ── 安全提示横幅 ──────────────────────────────────────────
-document.getElementById('bannerClose').addEventListener('click', () => {
-  document.getElementById('securityBanner').style.display = 'none';
+const user = await refreshUser();
+// ── 子界面 Tab 切换 ────────────────────────────────────────
+function updateClaudeHash(patch) {
+  const sp = new URLSearchParams(location.hash.slice(1));
+  for (const [k, v] of Object.entries(patch)) {
+    if (v == null || v === '') sp.delete(k); else sp.set(k, v);
+  }
+  const s = sp.toString();
+  const newHash = s ? ('#' + s) : '';
+  if (location.hash !== newHash) {
+    history.replaceState(null, '', location.pathname + location.search + newHash);
+  }
+}
+
+// ── 批量处理 iframe 状态持久化 ───────────────────────────
+// 把 sessionStorage 里保存的子页 hash 拼回 iframe.src,确保刷新后仍停留在原子页
+(function restoreBatchIframe() {
+  const f = document.getElementById('batchFrame');
+  if (!f) return;
+  const savedHash = sessionStorage.getItem('batch_iframe_hash') || '';
+  if (savedHash) f.src = 'batch.html?embed=1' + savedHash;
+})();
+window.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'batch-hash') {
+    try { sessionStorage.setItem('batch_iframe_hash', e.data.hash || ''); } catch {}
+  }
 });
 
-const user = await refreshUser();
-document.getElementById('userBar').innerHTML = `
-  <span class="username">${user.username}${user.role === 'admin' ? '（管理员）' : ''}</span>
-  <button class="logout" id="logoutBtn">退出</button>`;
-document.getElementById('logoutBtn').addEventListener('click', () => logout());
-if (user.role === 'admin') { const l = document.getElementById('usersLink'); if (l) l.style.display = 'block'; const k = document.getElementById('keysLink'); if (k) k.style.display = 'block'; }
-
-// ── 子界面 Tab 切换 ────────────────────────────────────────
 document.querySelectorAll('.sub-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.sub-panel').forEach(p => p.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+    updateClaudeHash({ panel: tab.dataset.panel });
   });
 });
+
+// 刷新后恢复子 tab
+(function restoreClaudePanel() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const panel = params.get('panel');
+  if (!panel) return;
+  const btn = document.querySelector(`.sub-tab[data-panel="${panel}"]`);
+  if (btn) btn.click();
+})();
 
 const messagesEl     = document.getElementById('messages');
 const userInput      = document.getElementById('userInput');
 const sendBtn        = document.getElementById('sendBtn');
-const providerSelect = document.getElementById('providerSelect');
-const configSelect   = document.getElementById('configSelect');
-const modelSelect    = document.getElementById('modelSelect');
+const providerInput  = document.getElementById('providerInput');
+const configInput    = document.getElementById('configInput');
+const modelInput     = document.getElementById('modelInput');
+const providerList   = document.getElementById('providerList');
+const configList     = document.getElementById('configList');
+const modelList      = document.getElementById('modelList');
 const attachmentsRow = document.getElementById('attachmentsRow');
 const fileInput      = document.getElementById('fileInput');
 const attachBtn      = document.getElementById('attachBtn');
@@ -520,22 +456,45 @@ async function loadSession(s) {
     chatHistory = [];
     messagesEl.innerHTML = '';
     data.messages.forEach(m => {
-      const bubble = addBubble(m.role);
-      renderMessageContent(bubble, m.content);
+      const bubble = addBubble(m.role, '', m.role === 'assistant' ? (m.model || '') : '');
+      renderMessageContent(bubble, m.content, m.role);
       if (m.role !== 'system') {
-        // 尝试解析 JSON 字符串（图片消息存为 JSON）
         let c = m.content;
         try { const p = JSON.parse(c); if (Array.isArray(p)) c = p; } catch {}
         chatHistory.push({ role: m.role, content: c });
       }
     });
+    // 锁定供应商/API（保持原 request_id 计费归属），但模型解锁，可换模型继续
+    const sess = data.session || {};
+    const cfgId = sess.config_id ? String(sess.config_id) : '';
+    const entry = _approvedList.find(c => String(c.request_id) === cfgId);
+    if (entry) {
+      providerInput.value = entry.provider;
+      configInput.value = entry.api_name || '';
+      _currentRequestId = entry.request_id;
+      // 用该 API 的可用模型重建 modelList，并预选当时的模型
+      const models = entry.available_models
+        ? entry.available_models.split(',').map(m => m.trim()).filter(Boolean)
+        : [];
+      modelList.innerHTML = models.map(m => `<option value="${m}">`).join('');
+    } else if (sess.config_id) {
+      providerInput.value = '';
+      configInput.value = '（历史会话）';
+      _currentRequestId = sess.config_id;
+      modelList.innerHTML = '';
+    }
+    modelInput.value = sess.model || '';
+    providerInput.disabled = true;
+    configInput.disabled = true;
+    modelInput.disabled = false;
+
     document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
     [...sessionListEl.children].forEach(el => { if (el.dataset.sid == s.id) el.classList.add('active'); });
   } catch(e) {}
 }
 
-// 渲染消息内容：纯文本直接显示，JSON 数组则解析出图片缩略图和文字
-function renderMessageContent(bubble, raw) {
+// 渲染消息内容：用户消息纯文本，助手消息走 Markdown；JSON 数组解析出图片+文字
+function renderMessageContent(bubble, raw, role = 'user') {
   let parsed;
   try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { parsed = null; }
 
@@ -553,21 +512,35 @@ function renderMessageContent(bubble, raw) {
     }
     if (texts) {
       const t = document.createElement('div');
-      t.style.whiteSpace = 'pre-wrap';
-      t.textContent = texts;
+      if (role === 'assistant') {
+        renderMarkdown(t, texts);
+      } else {
+        t.style.whiteSpace = 'pre-wrap';
+        t.textContent = texts;
+      }
       bubble.appendChild(t);
     }
-    if (!imgs.length && !texts) bubble.textContent = raw; // fallback
+    if (!imgs.length && !texts) bubble.textContent = raw;
   } else {
-    bubble.textContent = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    if (role === 'assistant') {
+      renderMarkdown(bubble, text);
+    } else {
+      bubble.textContent = text;
+    }
   }
 }
 
 document.getElementById('newChatBtn').addEventListener('click', () => {
   chatHistory = []; attachments = []; renderAttachments();
   currentSessionId = null;
+  _currentRequestId = null;
   messagesEl.innerHTML = '<p class="empty-hint">发送消息开始对话</p>';
   document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
+  providerInput.disabled = false;
+  configInput.disabled = false;
+  modelInput.disabled = false;
+  rebuildConfigBar();
   userInput.focus();
 });
 
@@ -629,8 +602,8 @@ function openLightbox(src) {
   lightbox.classList.add('open');
 }
 
-// 给图片元素绑定放大事件
-function makeThumb(src, style = 'width:80px;height:80px;object-fit:cover;border-radius:6px;cursor:zoom-in') {
+// 给图片元素绑定放大事件（气泡内显示，高度 200px）
+function makeThumb(src, style = 'max-height:200px;max-width:100%;object-fit:contain;border-radius:6px;cursor:zoom-in;display:block;margin:4px 0') {
   const img = document.createElement('img');
   img.src = src;
   img.style.cssText = style;
@@ -675,8 +648,8 @@ async function ensureSession(firstMessageText) {
     const res = await fetch('http://localhost:8000/sessions', {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({
-        config_id: configSelect.value ? parseInt(configSelect.value) : null,
-        model: modelSelect.value,
+        config_id: _currentRequestId || null,
+        model: modelInput.value,
         title: firstMessageText.slice(0, 50),
       }),
     });
@@ -686,68 +659,152 @@ async function ensureSession(firstMessageText) {
   } catch(e) {}
 }
 
-async function saveMessage(role, content) {
+async function saveMessage(role, content, model = '') {
   if (!currentSessionId) return;
   const text = typeof content === 'string' ? content : JSON.stringify(content);
   fetch('http://localhost:8000/sessions/messages', {
     method: 'POST', headers: authHeaders(),
-    body: JSON.stringify({ session_id: currentSessionId, role, content: text }),
+    body: JSON.stringify({ session_id: currentSessionId, role, content: text, model }),
   }).catch(() => {});
 }
 
-// ── 配置选择 ──────────────────────────────────────────────
+// ── 配置选择（input + datalist 模糊匹配）──────────────────
 let _approvedList = [];
+let _currentRequestId = null;   // 当前选中的 api_requests.id
 
 async function loadApprovedConfigs() {
   try {
     const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
     _approvedList = await res.json();
     if (!_approvedList.length) {
-      providerSelect.innerHTML = '<option value="">— 暂无可用 API —</option>';
-      configSelect.innerHTML = '<option value="">—</option>';
+      providerList.innerHTML = '';
+      configList.innerHTML = '';
+      modelList.innerHTML = '';
+      providerInput.placeholder = '— 暂无可用 API —';
       setInputEnabled(false);
       messagesEl.innerHTML = `<div class="no-api-hint"><p>暂无可用 API</p><p><a href="apply.html">前往申请 →</a></p></div>`;
       return;
     }
-    const providers = [...new Set(_approvedList.map(c => c.provider))];
-    providerSelect.innerHTML = '<option value="">— 请选择 —</option>' +
-      providers.map(p => `<option value="${p}">${p}</option>`).join('');
-    configSelect.innerHTML = '<option value="">— 请选择 —</option>';
+    rebuildConfigBar();
   } catch(e) {}
 }
 
-providerSelect.addEventListener('change', () => {
-  const filtered = _approvedList.filter(c => c.provider === providerSelect.value);
-  configSelect.innerHTML = filtered.length
-    ? '<option value="">— 请选择 —</option>' + filtered.map(c => `<option value="${c.id}">${c.name}</option>`).join('')
-    : '<option value="">— 暂无 —</option>';
-  modelSelect.innerHTML = '<option value="">— 请选择 —</option>';
+const LS_PROV = 'claude_last_provider';
+const LS_CFG  = 'claude_last_config';
+const LS_MDL  = 'claude_last_model';
+
+function rebuildConfigBar() {
+  const providers = [...new Set(_approvedList.map(c => c.provider))];
+  providerList.innerHTML = providers.map(p => `<option value="${p}">`).join('');
+  const lastProv = localStorage.getItem(LS_PROV);
+  if (lastProv && providers.includes(lastProv)) {
+    providerInput.value = lastProv;
+    fillConfigsForProvider(lastProv);
+  } else {
+    providerInput.value = '';
+    configInput.value = '';
+    modelInput.value = '';
+    configList.innerHTML = '';
+    modelList.innerHTML = '';
+  }
+}
+
+function fillConfigsForProvider(prov) {
+  const filtered = _approvedList.filter(c => c.provider === prov);
+  configList.innerHTML = filtered.map(c => {
+    const label = c.api_name || '（未命名）';
+    return `<option value="${label}">`;
+  }).join('');
+  const lastCfgName = localStorage.getItem(LS_CFG);
+  const match = lastCfgName && filtered.find(c => c.api_name === lastCfgName);
+  if (match) {
+    configInput.value = match.api_name;
+    _currentRequestId = match.request_id;
+    loadModelsForConfig(match);
+  } else {
+    configInput.value = '';
+    _currentRequestId = null;
+    modelInput.value = '';
+    modelList.innerHTML = '';
+  }
+}
+
+providerInput.addEventListener('change', () => {
+  const v = providerInput.value.trim();
+  localStorage.setItem(LS_PROV, v);
+  fillConfigsForProvider(v);
 });
 
-configSelect.addEventListener('change', () => loadModelsForConfig(configSelect.value));
+configInput.addEventListener('change', () => {
+  const v = configInput.value.trim();
+  const prov = providerInput.value.trim();
+  const entry = _approvedList.find(c => c.provider === prov && c.api_name === v);
+  if (entry) {
+    _currentRequestId = entry.request_id;
+    localStorage.setItem(LS_CFG, v);
+    loadModelsForConfig(entry);
+  } else {
+    _currentRequestId = null;
+    modelList.innerHTML = '';
+  }
+});
 
-async function loadModelsForConfig(configId) {
-  if (!configId) { modelSelect.innerHTML = '<option value="">— 请选择 —</option>'; return; }
-  modelSelect.innerHTML = '<option value="">— 加载中 —</option>';
-  try {
-    const res = await fetch(`http://localhost:8000/configs/${configId}/models`);
-    const data = await res.json();
-    modelSelect.innerHTML = data.models?.length
-      ? data.models.map(m => `<option value="${m}">${m}</option>`).join('')
-      : '<option value="">— 暂无可用模型 —</option>';
-  } catch(e) { modelSelect.innerHTML = '<option value="">— 加载失败 —</option>'; }
+const COMMON_MODELS = [
+  'claude-opus-4-20250514', 'claude-sonnet-4-20250514',
+  'claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022',
+  'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo',
+  'deepseek-chat', 'deepseek-reasoner',
+  'gemini-2.5-pro', 'gemini-2.5-flash',
+];
+
+function loadModelsForConfig(entry) {
+  const configured = entry?.available_models
+    ? entry.available_models.split(',').map(m => m.trim()).filter(Boolean)
+    : [];
+  const all = [...configured];
+  COMMON_MODELS.forEach(m => { if (!all.includes(m)) all.push(m); });
+  modelList.innerHTML = all.map(m => `<option value="${m}">`).join('');
+  const lastMdl = localStorage.getItem(LS_MDL);
+  if (lastMdl && all.includes(lastMdl)) modelInput.value = lastMdl;
+  else if (configured.length) modelInput.value = configured[0];
+  else modelInput.value = '';
 }
+
+modelInput.addEventListener('change', () => {
+  localStorage.setItem(LS_MDL, modelInput.value.trim());
+});
 
 loadApprovedConfigs();
 
 // ── 气泡 ──────────────────────────────────────────────────
-function addBubble(role, text = '') {
+function renderMarkdown(target, raw) {
+  if (!raw) { target.innerHTML = ''; return; }
+  try {
+    const html = window.marked ? marked.parse(raw, { breaks: true, gfm: true }) : raw;
+    const safe = window.DOMPurify ? DOMPurify.sanitize(html) : html;
+    target.innerHTML = safe;
+    target.querySelectorAll('img').forEach(img => {
+      img.style.cursor = 'zoom-in';
+      img.addEventListener('click', e => { e.stopPropagation(); openLightbox(img.src); });
+    });
+  } catch {
+    target.textContent = raw;
+  }
+}
+
+function addBubble(role, text = '', model = '') {
   const empty = messagesEl.querySelector('.empty-hint, .no-api-hint');
   if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = `bubble bubble-${role}`;
   div.textContent = text;
   messagesEl.appendChild(div);
+  if (role === 'assistant' && model) {
+    const tag = document.createElement('div');
+    tag.className = 'bubble-model-tag';
+    tag.textContent = `⎯ ${model}`;
+    messagesEl.appendChild(tag);
+  }
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return div;
 }
@@ -774,11 +831,22 @@ async function retryLastMessage() {
   bubble.classList.add('cursor');
   let accumulated = '';
   await streamChat({
-    messages: chatHistory, model: modelSelect.value, system: '',
-    config_id: parseInt(configSelect.value),
+    messages: chatHistory, model: modelInput.value.trim(), system: '',
+    request_id: _currentRequestId,
     user_token: (await import('../assets/js/auth.js')).getToken(),
-    onToken(c) { accumulated += c; bubble.textContent = accumulated; messagesEl.scrollTop = messagesEl.scrollHeight; },
-    onDone() { bubble.classList.remove('cursor'); chatHistory.push({ role:'assistant', content:accumulated }); saveMessage('assistant', accumulated); setInputEnabled(true); userInput.focus(); },
+    onToken(c) { accumulated += c; renderMarkdown(bubble, accumulated); messagesEl.scrollTop = messagesEl.scrollHeight; },
+    onDone() {
+      bubble.classList.remove('cursor');
+      renderMarkdown(bubble, accumulated);
+      const usedModel = modelInput.value.trim();
+      const tag = document.createElement('div');
+      tag.className = 'bubble-model-tag';
+      tag.textContent = `⎯ ${usedModel}`;
+      messagesEl.appendChild(tag);
+      chatHistory.push({ role:'assistant', content:accumulated });
+      saveMessage('assistant', accumulated, usedModel);
+      setInputEnabled(true); userInput.focus();
+    },
     onError(err) { bubble.remove(); addError(err, true); setInputEnabled(true); },
   });
 }
@@ -845,9 +913,9 @@ function setInputEnabled(enabled) {
 async function send() {
   const text = userInput.value.trim();
   if (!text && attachments.length === 0) return;
-  if (!providerSelect.value) { addError('请先选择供应商'); return; }
-  if (!configSelect.value)   { addError('请选择 API 名称'); return; }
-  if (!modelSelect.value)    { addError('请选择模型'); return; }
+  if (!providerInput.value.trim()) { addError('请先选择供应商'); return; }
+  if (!_currentRequestId)          { addError('请选择 API 名称'); return; }
+  if (!modelInput.value.trim())    { addError('请选择模型'); return; }
 
   userInput.value = '';
   let content;
@@ -898,14 +966,21 @@ async function send() {
   let accumulated = '';
 
   await streamChat({
-    messages: chatHistory, model: modelSelect.value, system: '',
-    config_id: parseInt(configSelect.value),
+    messages: chatHistory, model: modelInput.value.trim(), system: '',
+    request_id: _currentRequestId,
     user_token: (await import('../assets/js/auth.js')).getToken(),
-    onToken(chunk) { accumulated += chunk; bubble.textContent = accumulated; messagesEl.scrollTop = messagesEl.scrollHeight; },
+    onToken(chunk) { accumulated += chunk; renderMarkdown(bubble, accumulated); messagesEl.scrollTop = messagesEl.scrollHeight; },
     onDone() {
       bubble.classList.remove('cursor');
+      renderMarkdown(bubble, accumulated);
+      const usedModel = modelInput.value.trim();
+      // 在气泡下方插入模型标签
+      const tag = document.createElement('div');
+      tag.className = 'bubble-model-tag';
+      tag.textContent = `⎯ ${usedModel}`;
+      messagesEl.appendChild(tag);
       chatHistory.push({ role:'assistant', content: accumulated });
-      saveMessage('assistant', accumulated);
+      saveMessage('assistant', accumulated, usedModel);
       setInputEnabled(true);
       userInput.focus();
       loadSessions();
@@ -920,300 +995,63 @@ async function send() {
 
 sendBtn.addEventListener('click', send);
 userInput.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
-attachBtn.addEventListener('click', () => fileInput.click());
+let _uploadConfirmed = false;   // 当次页面会话内,确认过一次后续不再提示
+attachBtn.addEventListener('click', () => {
+  if (_uploadConfirmed) { fileInput.click(); return; }
+  document.getElementById('uploadConfirmModal').classList.add('open');
+});
+document.getElementById('uploadConfirmOk').addEventListener('click', () => {
+  _uploadConfirmed = true;
+  document.getElementById('uploadConfirmModal').classList.remove('open');
+  fileInput.click();
+});
 fileInput.addEventListener('change', () => { processFiles([...fileInput.files]); fileInput.value=''; });
 messagesEl.addEventListener('dragover', e => { e.preventDefault(); messagesEl.classList.add('drag-over'); });
 messagesEl.addEventListener('dragleave', () => messagesEl.classList.remove('drag-over'));
 messagesEl.addEventListener('drop', e => { e.preventDefault(); messagesEl.classList.remove('drag-over'); processFiles([...e.dataTransfer.files]); });
 
-// ══════════════════════════════════════════════════════════
-// 脚本编辑器
-// ══════════════════════════════════════════════════════════
-(function initScriptEditor() {
+// ── 侧边栏拖拽调整宽度 ──────────────────────────────────────
+{
+  const sidebar = document.getElementById('sessionSidebar');
+  const handle = document.getElementById('resizeHandle');
+  const LS_WIDTH = 'claude_sidebar_width';
+  const saved = localStorage.getItem(LS_WIDTH);
+  if (saved) sidebar.style.width = saved + 'px';
 
-const TEMPLATE = `# 可用变量：
-#   df        — 已加载的 DataFrame（parquet/json/csv/excel）
-#   WORK_DIR  — 本次运行的独立工作目录
-#   AI_MODEL  — 当前选中的模型名
-#
-# 可用函数：
-#   chat(prompt, model=None)  → 调 AI，返回文本
-#   show_image(path)          → 在日志区显示图片
-#   show_chart(fig)           → 在日志区显示 matplotlib 图表
-#   show_video(path)          → 在日志区显示视频
-#   save_file(path)           → 加入结果文件列表
-
-import os
-import pandas as pd
-
-print(f"数据形状: {df.shape}")
-print(df.head())
-
-# 示例：批量调 AI
-# df["result"] = df["content"].apply(lambda x: chat(x))
-# output_path = os.path.join(WORK_DIR, "output.csv")
-# df.to_csv(output_path, index=False)
-# save_file(output_path)
-`;
-
-// ── Monaco 懒加载 ─────────────────────────────────────────
-let monacoEditor = null;
-
-function initMonaco() {
-  if (monacoEditor || !window.require) return;
-  require(['vs/editor/editor.main'], function () {
-    monacoEditor = monaco.editor.create(
-      document.getElementById('scriptEditorContainer'), {
-        value: TEMPLATE,
-        language: 'python',
-        theme: 'vs-dark',
-        fontSize: 13,
-        minimap: { enabled: false },
-        scrollBeyondLastLine: false,
-        automaticLayout: true,
-        tabSize: 4,
-        insertSpaces: true,
-        wordWrap: 'on',
-      }
-    );
+  let startX, startW;
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = sidebar.offsetWidth;
+    handle.classList.add('active');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   });
-}
-
-document.querySelector('.sub-tab[data-panel="script"]')
-  ?.addEventListener('click', () => {
-    setTimeout(initMonaco, 80);
-    if (!_scriptConfigs.length) loadScriptConfigs();
-  });
-
-// ── 文件上传 ──────────────────────────────────────────────
-let uploadedFileId = null;
-const sFileDrop  = document.getElementById('scriptFileDrop');
-const sFileInput = document.getElementById('scriptFileInput');
-const sFileInfo  = document.getElementById('scriptFileInfo');
-
-sFileDrop.addEventListener('click',     () => sFileInput.click());
-sFileDrop.addEventListener('dragover',  e  => { e.preventDefault(); sFileDrop.classList.add('dragover'); });
-sFileDrop.addEventListener('dragleave', ()  => sFileDrop.classList.remove('dragover'));
-sFileDrop.addEventListener('drop', e => {
-  e.preventDefault(); sFileDrop.classList.remove('dragover');
-  if (e.dataTransfer.files[0]) uploadScriptFile(e.dataTransfer.files[0]);
-});
-sFileInput.addEventListener('change', () => {
-  if (sFileInput.files[0]) uploadScriptFile(sFileInput.files[0]);
-});
-document.getElementById('scriptFileClear').addEventListener('click', () => {
-  uploadedFileId = null;
-  sFileDrop.style.display = ''; sFileInfo.style.display = 'none'; sFileInput.value = '';
-});
-
-async function uploadScriptFile(file) {
-  sFileDrop.style.display = 'none'; sFileInfo.style.display = 'flex';
-  document.getElementById('scriptFileName').textContent = file.name;
-  const statsEl = document.getElementById('scriptFileStats');
-  statsEl.textContent = '上传中…'; statsEl.style.color = '';
-  const form = new FormData(); form.append('file', file);
-  try {
-    const { getToken } = await import('../assets/js/auth.js');
-    const res = await fetch('http://localhost:8000/script/upload', {
-      method: 'POST',
-      headers: { 'X-Token': getToken() || '' },
-      body: form,
-    });
-    if (!res.ok) { const d = await res.json(); throw new Error(d.detail); }
-    const d = await res.json();
-    uploadedFileId = d.file_id;
-    const colPreview = (d.col_names || []).slice(0, 4).join(', ');
-    statsEl.textContent = `${d.rows.toLocaleString()} 行 · ${d.columns} 列 (${colPreview}${d.columns > 4 ? '…' : ''})`;
-  } catch(e) {
-    statsEl.textContent = '上传失败：' + e.message;
-    statsEl.style.color = '#dc2626';
+  function onMove(e) {
+    const w = Math.max(140, Math.min(500, startW + e.clientX - startX));
+    sidebar.style.width = w + 'px';
+  }
+  function onUp() {
+    handle.classList.remove('active');
+    localStorage.setItem(LS_WIDTH, sidebar.offsetWidth);
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
   }
 }
 
-// ── 模型配置联动 ──────────────────────────────────────────
-let _scriptConfigs = [];
-
-async function loadScriptConfigs() {
-  const { authHeaders } = await import('../assets/js/auth.js');
-  const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
-  _scriptConfigs = await res.json().catch(() => []);
-  const providers = [...new Set(_scriptConfigs.map(c => c.provider))];
-  const pSel = document.getElementById('scriptProviderSel');
-  pSel.innerHTML = '<option value="">— 请选择 —</option>' +
-    providers.map(p => `<option value="${p}">${p}</option>`).join('');
-}
-
-document.getElementById('scriptProviderSel').addEventListener('change', e => {
-  const filtered = _scriptConfigs.filter(c => c.provider === e.target.value);
-  const cSel = document.getElementById('scriptConfigSel');
-  cSel.innerHTML = filtered.length
-    ? '<option value="">— 请选择 —</option>' + filtered.map(c => `<option value="${c.id}">${c.name}</option>`).join('')
-    : '<option value="">— 暂无 —</option>';
-  document.getElementById('scriptModelSel').innerHTML = '<option value="">— 请选择 —</option>';
-});
-
-document.getElementById('scriptConfigSel').addEventListener('change', async e => {
-  const id = e.target.value; if (!id) return;
-  const res = await fetch(`http://localhost:8000/configs/${id}/models`);
-  const data = await res.json().catch(() => ({ models: [] }));
-  const mSel = document.getElementById('scriptModelSel');
-  mSel.innerHTML = data.models?.length
-    ? data.models.map(m => `<option value="${m}">${m}</option>`).join('')
-    : '<option value="">— 暂无模型 —</option>';
-});
-
-// ── 输出 Tab 切换 ─────────────────────────────────────────
-document.querySelectorAll('.script-out-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.script-out-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.script-out-panel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    const id = 'scriptOut' + tab.dataset.out[0].toUpperCase() + tab.dataset.out.slice(1);
-    document.getElementById(id).classList.add('active');
-  });
-});
-
-// ── 运行 / 停止 / 清空 ────────────────────────────────────
-let _scriptRunId   = null;
-let _scriptFiles   = 0;
-let _scriptTimer   = null;
-let _scriptAbort   = null;
-
-document.getElementById('scriptRunBtn').addEventListener('click',  runScript);
-document.getElementById('scriptStopBtn').addEventListener('click', () => _scriptAbort?.abort());
-document.getElementById('scriptClearBtn').addEventListener('click', clearScriptOutput);
-
-function clearScriptOutput() {
-  document.getElementById('scriptLog').innerHTML =
-    '<span style="color:var(--text-muted);font-size:.82rem">运行后输出将显示在这里</span>';
-  document.getElementById('scriptResultFiles').innerHTML =
-    '<p style="color:var(--text-muted);font-size:.82rem;padding:16px">暂无结果文件</p>';
-  document.getElementById('scriptDownloadAll').style.display = 'none';
-  document.getElementById('scriptFileBadge').style.display   = 'none';
-  _scriptFiles = 0; _scriptRunId = null;
-}
-
-async function runScript() {
-  const code = monacoEditor?.getValue() ?? '';
-  if (!code.trim()) return;
-  const configId = document.getElementById('scriptConfigSel').value;
-  const model    = document.getElementById('scriptModelSel').value;
-  if (!configId || !model) { alert('请先选择 API 配置和模型'); return; }
-
-  document.querySelector('.script-out-tab[data-out="log"]').click();
-  clearScriptOutput();
-
-  monacoEditor?.updateOptions({ readOnly: true });
-  document.getElementById('scriptRunBtn').style.display  = 'none';
-  document.getElementById('scriptStopBtn').style.display = '';
-  let elapsed = 0;
-  const timerEl = document.getElementById('scriptTimer');
-  timerEl.textContent = '0s';
-  _scriptTimer = setInterval(() => { elapsed++; timerEl.textContent = elapsed + 's'; }, 1000);
-
-  const { getToken } = await import('../assets/js/auth.js');
-  _scriptAbort = new AbortController();
-
-  try {
-    const res = await fetch('http://localhost:8000/script/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Token': getToken() || '' },
-      body: JSON.stringify({ code, config_id: configId ? parseInt(configId) : null,
-                             model, file_id: uploadedFileId }),
-      signal: _scriptAbort.signal,
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      appendScriptLog('error', (d.detail || `HTTP ${res.status}`) + '\n');
-      return;
-    }
-    const reader = res.body.getReader();
-    const dec    = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n'); buf = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        try { handleScriptEvent(JSON.parse(line.slice(6))); } catch {}
-      }
-    }
-  } catch(e) {
-    if (e.name !== 'AbortError') appendScriptLog('error', '连接中断：' + e.message + '\n');
-    else appendScriptLog('info', '已手动停止\n');
-  } finally {
-    clearInterval(_scriptTimer);
-    monacoEditor?.updateOptions({ readOnly: false });
-    document.getElementById('scriptRunBtn').style.display  = '';
-    document.getElementById('scriptStopBtn').style.display = 'none';
-    timerEl.textContent = '';
-  }
-}
-
-function handleScriptEvent(ev) {
-  const logEl = document.getElementById('scriptLog');
-  switch(ev.type) {
-    case 'stdout': appendScriptLog('stdout', ev.text); break;
-    case 'stderr': appendScriptLog('stderr', ev.text); break;
-    case 'error':  appendScriptLog('error',  ev.text); break;
-    case 'info':   appendScriptLog('info',   ev.text); break;
-    case 'image': {
-      const img = document.createElement('img');
-      img.src = ev.data;
-      img.addEventListener('click', () => openLightbox(ev.data));
-      logEl.appendChild(img); logEl.scrollTop = logEl.scrollHeight; break;
-    }
-    case 'video': {
-      const vid = document.createElement('video');
-      vid.controls = true;
-      vid.src = `http://localhost:8000/script/result/${ev.run_id}/${ev.filename}`;
-      logEl.appendChild(vid); logEl.scrollTop = logEl.scrollHeight; break;
-    }
-    case 'file': {
-      _scriptRunId = ev.run_id; _scriptFiles++;
-      const badge = document.getElementById('scriptFileBadge');
-      badge.textContent = _scriptFiles; badge.style.display = '';
-      const filesEl = document.getElementById('scriptResultFiles');
-      if (filesEl.querySelector('p')) filesEl.innerHTML = '';
-      const sizeStr = ev.size > 1048576 ? (ev.size/1048576).toFixed(1)+' MB'
-                    : ev.size > 1024    ? (ev.size/1024).toFixed(1)+' KB'
-                    : ev.size + ' B';
-      const item = document.createElement('div');
-      item.className = 'result-file-item';
-      item.innerHTML = `<span class="file-name">📄 ${ev.name}</span>
-        <span class="file-size">${sizeStr}</span>
-        <a class="btn btn-secondary" style="padding:3px 10px;font-size:.78rem;text-decoration:none"
-           href="http://localhost:8000/script/result/${ev.run_id}/download"
-           download="result_${ev.run_id.slice(0,8)}.zip">↓</a>`;
-      filesEl.appendChild(item);
-      document.getElementById('scriptDownloadAll').style.display = '';
-      break;
-    }
-    case 'done': {
-      if (ev.run_id) _scriptRunId = ev.run_id;
-      appendScriptLog('info', `\n✅ 完成（${ev.elapsed}s，${ev.file_count} 个结果文件）\n`);
-      break;
-    }
-  }
-}
-
-function appendScriptLog(cls, text) {
-  const logEl = document.getElementById('scriptLog');
-  const hint = logEl.querySelector('[style]');
-  if (hint) hint.remove();
-  const span = document.createElement('span');
-  span.className = `log-${cls}`; span.textContent = text;
-  logEl.appendChild(span); logEl.scrollTop = logEl.scrollHeight;
-}
-
-document.getElementById('scriptDlAllBtn').addEventListener('click', () => {
-  if (_scriptRunId)
-    window.location.href = `http://localhost:8000/script/result/${_scriptRunId}/download`;
-});
-
-})(); // initScriptEditor
 </script>
+
+<!-- 上传前确认弹窗(每次刷新页面后第一次点 📎 触发) -->
+<div class="modal-bg" id="uploadConfirmModal">
+  <div class="modal" style="width:420px">
+    <h3>上传前请确认</h3>
+    <p style="font-size:.9rem;color:var(--text);margin-bottom:24px">
+      请确认上传数据不属于公司保密资产。
+    </p>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="uploadConfirmOk">确认</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

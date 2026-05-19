@@ -3,7 +3,7 @@ const BASE = 'http://localhost:8000';
 function authHeaders() {
   return {
     'Content-Type': 'application/json',
-    'X-Token': localStorage.getItem('token') || '',
+    'X-Token': localStorage.getItem('platform_token') || '',
   };
 }
 

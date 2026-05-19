@@ -24,8 +24,7 @@
       </div>
       <div class="sidebar-children">
         <a href="claude.html"  class="sidebar-item">API调用</a>
-        <a href="apply.html"   class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item sidebar-admin" id="keysLink">密钥管理</a>
+        <a href="apply.html"   class="sidebar-item">API管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
         <a href="users.html"   class="sidebar-item active">用户管理</a>
       </div>
@@ -81,14 +80,8 @@ initSidebar();
 
 const me = await refreshUser();
 if (me.role !== 'admin') { window.location.href = '/pages/claude.html'; throw new Error('no access'); }
-
-document.getElementById('userBar').innerHTML = `
-  <span class="username">${me.username}（管理员）</span>
-  <button class="logout" id="logoutBtn">退出</button>`;
-document.getElementById('logoutBtn').addEventListener('click', () => logout());
-const k = document.getElementById('keysLink'); if (k) k.style.display = 'block';
-
-const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
+// /admin/users (GET) 走 X-Token 鉴权;角色变更/重置密码/删除三个写接口走 X-Admin-Password,所以两个 header 都带上
+const ADMIN_HEADERS = { ...authHeaders(), 'X-Admin-Password': 'admin123' };
 let resetUserId = null;
 let allUsers = [];
 

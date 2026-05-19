@@ -5,10 +5,37 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>密钥管理 — 数据平台</title>
   <link rel="stylesheet" href="../assets/css/platform.css">
+  <style>
+    .th-filter { position: relative; white-space: nowrap; }
+    .filter-btn {
+      background: none; border: none; cursor: pointer;
+      font-size: .72rem; color: var(--text-muted);
+      padding: 0 2px; vertical-align: middle; margin-left: 4px;
+    }
+    .filter-btn:hover, .filter-btn.active { color: var(--green); }
+    .filter-pop {
+      position: absolute; top: 100%; left: 0; z-index: 200;
+      background: #fff; border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,.12);
+      min-width: 180px;
+    }
+    .filter-pop input, .filter-pop select {
+      width: 100%; font-size: .82rem; padding: 4px 6px;
+      border: 1px solid var(--border); border-radius: 4px;
+    }
+    .modal .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    /* embed 模式：隐藏导航，内容区全宽且贴边（与父页 tab 间距一致） */
+    body.embed .top-bar,
+    body.embed .sidebar,
+    body.embed .breadcrumb { display: none !important; }
+    body.embed .layout { display: block !important; }
+    body.embed .main { margin: 0 !important; padding: 0 !important; }
+    body.embed .toolbar { margin-bottom: 8px !important; }
+  </style>
 </head>
 <body>
 
-<!-- 顶部固定导航栏 -->
 <div class="top-bar">
   <button class="sidebar-toggle" id="sidebarToggle">☰</button>
   <span class="brand">数据平台</span>
@@ -24,8 +51,7 @@
       </div>
       <div class="sidebar-children">
         <a href="claude.html"  class="sidebar-item">API调用</a>
-        <a href="apply.html"   class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item active">密钥管理</a>
+        <a href="apply.html"   class="sidebar-item">API管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
         <a href="users.html"   class="sidebar-item sidebar-admin" id="usersLink">用户管理</a>
       </div>
@@ -33,78 +59,50 @@
   </div>
 
   <div class="main">
-<div class="breadcrumb">
+<div class="breadcrumb" style="margin-bottom:0;padding-bottom:0;border-bottom:none">
   <a href="#">三方API管理</a>
   <span class="sep">›</span>
   <span class="current">密钥管理</span>
 </div>
 
-    <!-- 管理员:三层结构表(Spec 1) -->
-    <div id="adminSection" style="display:none">
+    <div id="adminSection">
       <div class="toolbar" style="margin-bottom:12px">
         <span class="page-title" style="margin:0">密钥管理</span>
         <div style="display:flex;gap:8px;margin-left:auto">
-          <button class="btn btn-primary" id="addAccountBtn">+ 新增帐号</button>
+          <button class="btn btn-primary" id="addAccountBtn">+ 新增供应商</button>
           <button class="btn btn-primary" id="addKeyBtn">+ 新增 API key</button>
           <button class="btn btn-secondary" id="reloadBtn">刷新</button>
         </div>
       </div>
       <div class="card" style="padding:0;overflow:auto">
-        <table id="acctTable" style="min-width:1800px">
+        <table id="acctTable" style="min-width:1400px">
           <thead>
             <tr>
-              <th>供应商</th><th>base_url</th><th>后端网址</th>
-              <th>总额接口</th><th>余额接口</th><th>费用接口</th>
-              <th>子帐号</th><th>API名称</th><th>API key</th>
-              <th>管理员</th><th>团队</th><th>创建人</th>
-              <th>总额</th><th>余额</th><th>操作</th>
-            </tr>
-            <tr id="filterRow">
-              <th><select data-filter="provider"><option value="">全部</option></select></th>
-              <th><input data-filter="base_url" placeholder="筛选"></th>
-              <th><input data-filter="backend"></th>
-              <th><input data-filter="quota_total"></th>
-              <th><input data-filter="balance"></th>
-              <th><input data-filter="cost"></th>
-              <th><select data-filter="sub_account"><option value="">全部</option></select></th>
-              <th><input data-filter="api_name"></th>
-              <th><input data-filter="api_key"></th>
-              <th><select data-filter="manager"><option value="">全部</option></select></th>
-              <th><select data-filter="team"><option value="">全部</option></select></th>
-              <th><select data-filter="creator"><option value="">全部</option></select></th>
-              <th>—</th><th>—</th><th>—</th>
+              <th class="th-filter" data-col="provider">供应商<button class="filter-btn" data-fcol="provider">⌄</button></th>
+              <th class="th-filter" data-col="base_url">base_url<button class="filter-btn" data-fcol="base_url">⌄</button></th>
+              <th class="th-filter" data-col="backend">后端网址<button class="filter-btn" data-fcol="backend">⌄</button></th>
+              <th class="th-filter" data-col="sub_account">子帐号<button class="filter-btn" data-fcol="sub_account">⌄</button></th>
+              <th class="th-filter" data-col="api_name">API名称<button class="filter-btn" data-fcol="api_name">⌄</button></th>
+              <th class="th-filter" data-col="api_key">API key<button class="filter-btn" data-fcol="api_key">⌄</button></th>
+              <th class="th-filter" data-col="manager">管理员<button class="filter-btn" data-fcol="manager">⌄</button></th>
+              <th class="th-filter" data-col="users">使用人<button class="filter-btn" data-fcol="users">⌄</button></th>
+              <th class="th-filter" data-col="creator">创建人<button class="filter-btn" data-fcol="creator">⌄</button></th>
+              <th>总额</th>
+              <th>余额</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody id="acctTbody"></tbody>
         </table>
       </div>
     </div>
-
-    <!-- 普通用户：显示已授权列表 -->
-    <div id="userSection" style="display:none">
-      <p class="page-title">密钥管理</p>
-      <div class="card" style="margin-bottom:16px;color:var(--text-muted);font-size:.9rem;line-height:1.8">
-        密钥由管理员统一管理。如需申请新 API 访问权限，请前往
-        <a href="apply.html" style="color:var(--green)">API申请&审核</a>。
-      </div>
-      <div class="card" style="padding:0;overflow:hidden">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>名称</th><th>供应商</th><th>子账号</th><th>可用模型</th><th>额度</th><th>IP限制</th><th>状态</th><th>创建时间</th></tr>
-            </thead>
-            <tbody id="userTbody"></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
   </div>
 </div>
 
-<!-- Modal A: 新增/编辑帐号 -->
+<!-- Modal A: 新增供应商（仅新增；编辑走 Modal D） -->
 <div class="modal-bg" id="acctModalBg">
   <div class="modal" style="width:560px">
-    <h3 id="acctModalTitle">新增帐号</h3>
+    <h3>新增供应商</h3>
     <div class="form-group"><label>供应商</label>
       <input id="aProvider" list="providerList" placeholder="如 anthropic">
       <datalist id="providerList"></datalist>
@@ -112,21 +110,14 @@
     <div class="form-group"><label>Base URL</label>
       <input id="aBaseUrl" placeholder="https://api.anthropic.com/v1"></div>
     <div class="form-group"><label>供应商后端网址</label>
-      <input id="aBackend" placeholder="Spec 2 用,可留空"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-      <div class="form-group" style="margin:0"><label>总额接口</label>
-        <input id="aQuotaPath" placeholder="/v1/..."></div>
-      <div class="form-group" style="margin:0"><label>余额接口</label>
-        <input id="aBalancePath" placeholder="/v1/..."></div>
-      <div class="form-group" style="margin:0"><label>费用接口</label>
-        <input id="aCostPath" placeholder="/v1/..."></div>
-    </div>
-    <div class="form-group"><label>管理员</label>
-      <select id="aManager"><option value="">不指定</option></select></div>
-    <div class="form-group"><label>所属团队</label>
-      <input id="aTeam" list="teamList">
-      <datalist id="teamList"></datalist>
-    </div>
+      <input id="aBackend" placeholder="可留空（费用接口拼接基址，留空则用 Base URL）"></div>
+    <p style="font-size:.82rem;color:var(--text-muted);margin:14px 0 6px;border-top:1px solid var(--border);padding-top:10px">费用接口（可选；填写后系统会用对应 API key 拉取总额/余额）</p>
+    <div class="form-group"><label>令牌总额接口</label>
+      <input id="aQuotaTotalPath" placeholder="如 /user/quota 或完整 URL"></div>
+    <div class="form-group"><label>已用额度接口</label>
+      <input id="aCostPath" placeholder="如 /user/used"></div>
+    <div class="form-group"><label>剩余额度接口</label>
+      <input id="aBalancePath" placeholder="如 /user/balance"></div>
     <p id="aErr" style="color:#dc2626;font-size:.83rem;min-height:18px"></p>
     <div class="modal-actions">
       <button class="btn btn-secondary" id="acctCancelBtn">取消</button>
@@ -134,42 +125,38 @@
     </div>
   </div>
 </div>
-<!-- Modal B: 新增/编辑子帐号 -->
-<div class="modal-bg" id="subModalBg">
-  <div class="modal">
-    <h3 id="subModalTitle">新增子帐号</h3>
-    <div class="form-group"><label>所属帐号</label>
-      <select id="sAccount" disabled></select></div>
-    <div class="form-group"><label>名称</label>
-      <input id="sName" placeholder="如 默认 / 项目A"></div>
-    <div class="form-group"><label>描述</label>
-      <input id="sDesc"></div>
-    <p id="sErr" style="color:#dc2626;font-size:.83rem;min-height:18px"></p>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" id="subCancelBtn">取消</button>
-      <button class="btn btn-primary" id="subSaveBtn">保存</button>
-    </div>
-  </div>
-</div>
 
-<!-- Modal C: 新增/编辑 API key -->
+<!-- Modal C: 新增 API key（编辑走 Modal D） -->
 <div class="modal-bg" id="keyModalBg">
-  <div class="modal">
-    <h3 id="keyModalTitle">新增 API key</h3>
-    <div class="form-group"><label>所属帐号</label>
+  <div class="modal" style="width:560px">
+    <h3>新增 API key</h3>
+    <div class="form-group"><label>所属供应商</label>
       <select id="kAccount"></select></div>
     <div class="form-group">
-      <label>所属子帐号
-        <button type="button" id="kNewSubBtn" class="btn-icon"
-                style="font-size:.75rem;margin-left:8px">+ 新建</button>
-      </label>
-      <select id="kSub"></select>
+      <label>所属子帐号</label>
+      <input id="kSub" list="kSubList" placeholder="选择或输入子帐号名称">
+      <datalist id="kSubList"></datalist>
     </div>
-    <div class="form-group"><label>API 名称</label>
-      <input id="kName" placeholder="如 主key 1"></div>
-    <div class="form-group"><label>API key</label>
-      <textarea id="kKey" rows="2" placeholder="sk-..."></textarea></div>
+    <div class="form-row">
+      <div class="form-group" style="margin:0"><label>API 名称</label>
+        <input id="kName" placeholder="如 主key 1"></div>
+      <div class="form-group" style="margin:0"><label>API key</label>
+        <input id="kKey" placeholder="sk-..."></div>
+    </div>
+    <div class="form-group"><label>管理员 <span style="color:#dc2626">*</span></label>
+      <input id="kManager" list="kManagerList" placeholder="管理员用户名（必填）">
+      <datalist id="kManagerList"></datalist>
+    </div>
     <p id="kErr" style="color:#dc2626;font-size:.83rem;min-height:18px"></p>
+    <div style="border-top:1px solid var(--border);margin:6px 0 12px;padding-top:12px;display:flex;align-items:center;gap:12px;font-size:.85rem;color:var(--text-muted);flex-wrap:wrap">
+      <span>批量导入：</span>
+      <label class="btn btn-secondary" style="cursor:pointer;margin:0">
+        选择 Excel 文件
+        <input type="file" id="kImportFile" accept=".xlsx" style="display:none">
+      </label>
+      <a id="kTemplateLink" href="#" style="color:var(--green)">下载模板</a>
+      <span id="kImportStatus" style="color:var(--text-muted)"></span>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" id="keyCancelBtn">取消</button>
       <button class="btn btn-primary" id="keySaveBtn">保存</button>
@@ -177,38 +164,105 @@
   </div>
 </div>
 
+<!-- Modal D: 统一编辑（供应商 + API key） -->
+<div class="modal-bg" id="editModalBg">
+  <div class="modal" style="width:600px">
+    <h3>编辑</h3>
+    <p style="font-size:.82rem;color:var(--text-muted);margin:-4px 0 12px">供应商信息</p>
+    <div class="form-group"><label>供应商</label><input id="eProvider" readonly style="background:var(--surface)"></div>
+    <div class="form-group"><label>Base URL</label><input id="eBaseUrl"></div>
+    <div class="form-group"><label>后端网址</label><input id="eBackend"></div>
+    <div class="form-group"><label>供应商管理员</label>
+      <input id="eAcctManager" list="eManagerList" placeholder="管理员用户名">
+      <datalist id="eManagerList"></datalist>
+    </div>
+    <p style="font-size:.82rem;color:var(--text-muted);margin:6px 0 4px">费用接口</p>
+    <div class="form-group"><label>令牌总额接口</label><input id="eQuotaTotalPath" placeholder="如 /user/quota"></div>
+    <div class="form-group"><label>已用额度接口</label><input id="eCostPath" placeholder="如 /user/used"></div>
+    <div class="form-group"><label>剩余额度接口</label><input id="eBalancePath" placeholder="如 /user/balance"></div>
+    <hr style="border:none;border-top:1px solid var(--border);margin:8px 0 12px">
+    <p style="font-size:.82rem;color:var(--text-muted);margin:0 0 8px" id="eKeySectionTitle">API Key 信息</p>
+    <div id="eKeySection">
+      <div class="form-row">
+        <div class="form-group" style="margin:0"><label>API 名称</label><input id="eKeyName"></div>
+        <div class="form-group" style="margin:0"><label>API key</label><input id="eKeyVal"></div>
+      </div>
+      <div class="form-group"><label>子帐号</label><input id="eKeySub" readonly style="background:var(--surface)"></div>
+    </div>
+    <p id="eErr" style="color:#dc2626;font-size:.83rem;min-height:18px"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="editCancelBtn">取消</button>
+      <button class="btn btn-primary" id="editSaveBtn">保存</button>
+    </div>
+  </div>
+</div>
+
 <script type="module">
 import { initSidebar } from '../assets/js/sidebar.js';
-import { requireLogin, refreshUser, authHeaders, logout } from '../assets/js/auth.js';
+import { requireLogin, refreshUser, authHeaders } from '../assets/js/auth.js';
 import {
-  listAccounts, createAccount, updateAccount, deleteAccount,
-  listSubAccounts, createSubAccount, updateSubAccount, deleteSubAccount,
+  listAccounts, createAccount, updateAccount,
+  listSubAccounts, createSubAccount,
   listApiKeys, createApiKey, updateApiKey, deleteApiKey,
-  listProviders, listTeams,
 } from '../assets/js/admin.js';
 
+const _isEmbed = new URLSearchParams(location.search).has('embed');
+if (_isEmbed) {
+  document.body.classList.add('embed');
+  // iframe 内点侧栏/breadcrumb 链接，强制在父窗口跳转，避免替换 iframe 自身
+  document.querySelectorAll('.sidebar a[href], .breadcrumb a[href]').forEach(a => {
+    if (!a.target) a.target = '_top';
+  });
+}
 if (!requireLogin()) throw new Error('redirect');
-initSidebar();
+if (!_isEmbed) initSidebar();
 
 const user    = await refreshUser();
 const isAdmin = user.role === 'admin';
 
-document.getElementById('userBar').innerHTML = `
-  <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
-  <button class="logout" id="logoutBtn">退出</button>`;
-document.getElementById('logoutBtn').addEventListener('click', () => logout());
-const usersLinkEl = document.getElementById('usersLink');
-if (usersLinkEl) usersLinkEl.style.display = isAdmin ? 'block' : 'none';
-
-// ── 顶层数据 ──────────────────────────────────────────────
 let allAccounts = [];
-let allSubAccounts = {};   // {account_id: [...]}
-let allKeys = {};          // {sub_account_id: [...]}
-let adminUsers = [];
+let allAccountOptions = [];   // 不受可见性过滤，供"新增 API key"下拉用
+let allSubAccounts = {};
+let allKeys = {};
 let flatRows = [];
+let userList = [];
+let _importedCount = 0;
+const filters = {};
 
 function esc(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── 模板下载（需带 token，不能直接用 href）────────────────
+document.getElementById('kTemplateLink').addEventListener('click', async function(e) {
+  e.preventDefault();
+  try {
+    const res = await fetch('http://localhost:8000/admin/api-keys/template.xlsx', {
+      headers: { 'X-Token': localStorage.getItem('platform_token') || '' },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'api_keys_template.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) { alert('下载失败：' + e.message); }
+});
+
+// ── 加载所有用户（供 manager 下拉）──
+async function loadUsers() {
+  try {
+    const res = await fetch('http://localhost:8000/admin/users', {
+      headers: { 'X-Token': localStorage.getItem('platform_token') || '' },
+    });
+    if (res.ok) userList = await res.json();
+  } catch {}
+  const fillDL = id => {
+    const dl = document.getElementById(id);
+    if (dl) dl.innerHTML = userList.map(u => `<option value="${esc(u.username)}">`).join('');
+  };
+  fillDL('eManagerList');
+  fillDL('kManagerList');
 }
 
 async function loadAll() {
@@ -216,9 +270,15 @@ async function loadAll() {
     allAccounts = await listAccounts();
   } catch (e) {
     document.getElementById('acctTbody').innerHTML =
-      `<tr><td colspan="15" style="text-align:center;color:#dc2626;padding:24px">加载失败:${esc(e.message)}</td></tr>`;
+      `<tr><td colspan="14" style="text-align:center;color:#dc2626;padding:24px">加载失败:${esc(e.message)}</td></tr>`;
     return;
   }
+  try {
+    const res = await fetch('http://localhost:8000/admin/accounts/options', {
+      headers: { 'X-Token': localStorage.getItem('platform_token') || '' },
+    });
+    allAccountOptions = res.ok ? await res.json() : [];
+  } catch { allAccountOptions = []; }
   allSubAccounts = {}; allKeys = {};
   for (const a of allAccounts) {
     try {
@@ -227,114 +287,148 @@ async function loadAll() {
       for (const s of subs) {
         allKeys[s.id] = await listApiKeys(s.id);
       }
-    } catch (e) { /* 局部失败不阻塞整体 */ }
+    } catch {}
   }
   buildFlatRows();
-  await refreshFilterDropdowns();
   renderTable();
+  refreshQuotaInline();
 }
 
 function buildFlatRows() {
   flatRows = [];
   for (const a of allAccounts) {
     const subs = allSubAccounts[a.id] || [];
-    if (!subs.length) { flatRows.push({ account: a, sub: null, key: null }); continue; }
     for (const s of subs) {
       const keys = allKeys[s.id] || [];
-      if (!keys.length) { flatRows.push({ account: a, sub: s, key: null }); continue; }
       for (const k of keys) flatRows.push({ account: a, sub: s, key: k });
     }
   }
+}
+
+function applyFilters(rows) {
+  return rows.filter(r => {
+    const a = r.account, s = r.sub, k = r.key;
+    for (const [col, v] of Object.entries(filters)) {
+      if (!v) continue;
+      let val = '';
+      if      (col === 'provider')    val = a.provider;
+      else if (col === 'base_url')    val = a.base_url;
+      else if (col === 'backend')     val = a.provider_backend_url || '';
+      else if (col === 'sub_account') val = s?.name || '';
+      else if (col === 'api_name')    val = k?.name || '';
+      else if (col === 'api_key')     val = k?.api_key || '';
+      else if (col === 'creator')     val = k?.creator_username || a.creator_username || '';
+      else if (col === 'manager')     val = k?.manager_username || '';
+      else if (col === 'users')       val = k?.users_username || '';
+      if (!String(val).toLowerCase().includes(String(v).toLowerCase())) return false;
+    }
+    return true;
+  });
 }
 
 function renderTable() {
   const tbody = document.getElementById('acctTbody');
   const visible = applyFilters(flatRows);
   if (!visible.length) {
-    tbody.innerHTML = '<tr><td colspan="15" style="text-align:center;color:var(--text-muted);padding:24px">无数据</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;color:var(--text-muted);padding:24px">无数据</td></tr>';
+    refreshFilterIndicators();
     return;
   }
   tbody.innerHTML = visible.map(r => {
     const a = r.account, s = r.sub, k = r.key;
-    const keyMasked = k ? '****' + (k.api_key || '').slice(-4) : '—';
-    const canEdit = isAdmin || a.created_by === user.id;
-    return `<tr>
+    const keyMasked = '****' + (k.api_key || '').slice(-4);
+    const canEdit = isAdmin || k.created_by === user.id;
+    const used    = (k.usage_count || 0) > 0;
+    const delDisabled = used ? 'disabled title="已被调用,不可删除"' : '';
+    return `<tr data-key-id="${k.id}">
       <td>${esc(a.provider)}</td>
       <td>${esc(a.base_url)}</td>
       <td>${esc(a.provider_backend_url || '')}</td>
-      <td>${esc(a.quota_total_path || '')}</td>
-      <td>${esc(a.balance_path || '')}</td>
-      <td>${esc(a.cost_path || '')}</td>
-      <td>${s ? esc(s.name) : '—'}</td>
-      <td>${k ? esc(k.name) : '—'}</td>
+      <td>${esc(s.name)}</td>
+      <td>${esc(k.name)}</td>
       <td><code>${keyMasked}</code></td>
-      <td>${esc(a.manager_username || '')}</td>
-      <td>${esc(a.team || '')}</td>
-      <td>${esc(a.creator_username || '')}</td>
-      <td style="color:var(--text-muted)">--</td>
-      <td style="color:var(--text-muted)">--</td>
+      <td>${esc(k.manager_username || '')}</td>
+      <td>${esc(k.users_username || '')}</td>
+      <td>${esc(k.creator_username || a.creator_username || '')}</td>
+      <td data-col="total" style="color:var(--text-muted)">--</td>
+      <td data-col="balance" style="color:var(--text-muted)">--</td>
       <td style="white-space:nowrap">
-        ${canEdit ? `<button class="btn-icon" data-edit-acct="${a.id}">编辑帐号</button>` : ''}
-        ${k && canEdit ? `<button class="btn-icon" data-edit-key="${k.id}">编辑API</button>` : ''}
-        ${k && canEdit ? `<button class="btn-icon btn-danger" data-del-key="${k.id}">删除</button>` : ''}
+        ${canEdit ? `<button class="btn-icon" data-edit="${k.id}">编辑</button>` : ''}
+        ${canEdit ? `<button class="btn-icon btn-danger" data-del="${k.id}" ${delDisabled}>删除</button>` : ''}
       </td>
     </tr>`;
   }).join('');
-  tbody.querySelectorAll('[data-edit-acct]').forEach(b =>
-    b.addEventListener('click', () => openAcctEdit(parseInt(b.dataset.editAcct))));
-  tbody.querySelectorAll('[data-edit-key]').forEach(b =>
-    b.addEventListener('click', () => openKeyEdit(parseInt(b.dataset.editKey))));
-  tbody.querySelectorAll('[data-del-key]').forEach(b =>
-    b.addEventListener('click', () => onDelKey(parseInt(b.dataset.delKey))));
+  tbody.querySelectorAll('[data-edit]').forEach(b =>
+    b.addEventListener('click', () => openEditModal(parseInt(b.dataset.edit))));
+  tbody.querySelectorAll('[data-del]').forEach(b => {
+    if (b.disabled) return;
+    b.addEventListener('click', () => onDelKey(parseInt(b.dataset.del)));
+  });
+  refreshFilterIndicators();
 }
 
-// ── Modal A: 帐号 ────────────────────────────────────────
+function refreshFilterIndicators() {
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.classList.toggle('active', !!filters[btn.dataset.fcol]);
+  });
+}
+
+// ── 漏斗筛选浮层 ─────────────────────────────────────────
+let openPop = null;
+function closeFilterPop() {
+  if (openPop) { openPop.remove(); openPop = null; }
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.filter-pop') && !e.target.closest('.filter-btn')) closeFilterPop();
+});
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const col = btn.dataset.fcol;
+    if (openPop && openPop.dataset.fcol === col) { closeFilterPop(); return; }
+    closeFilterPop();
+    const pop = document.createElement('div');
+    pop.className = 'filter-pop';
+    pop.dataset.fcol = col;
+    const isSelect = ['provider','sub_account','creator','manager'].includes(col);
+    if (isSelect) {
+      let opts = [];
+      if (col === 'provider') opts = [...new Set(allAccounts.map(a => a.provider).filter(Boolean))].sort();
+      else if (col === 'creator') opts = [...new Set(flatRows.map(r => r.key?.creator_username || r.account.creator_username).filter(Boolean))].sort();
+      else if (col === 'manager') opts = [...new Set(flatRows.map(r => r.key?.manager_username).filter(Boolean))].sort();
+      else if (col === 'sub_account') opts = [...new Set(Object.values(allSubAccounts).flat().map(s => s.name).filter(Boolean))].sort();
+      pop.innerHTML = `<select><option value="">全部</option>${opts.map(o => `<option value="${esc(o)}"${filters[col]===o?' selected':''}>${esc(o)}</option>`).join('')}</select>`;
+      const sel = pop.querySelector('select');
+      sel.addEventListener('change', () => {
+        filters[col] = sel.value;
+        renderTable();
+      });
+    } else {
+      pop.innerHTML = `<input placeholder="筛选..." value="${esc(filters[col] || '')}">`;
+      const inp = pop.querySelector('input');
+      inp.addEventListener('input', () => {
+        filters[col] = inp.value;
+        renderTable();
+      });
+      setTimeout(() => inp.focus(), 0);
+    }
+    btn.parentElement.appendChild(pop);
+    openPop = pop;
+  });
+});
+
+// ── Modal A: 新增供应商 ───────────────────────────────────
 const acctModalBg = document.getElementById('acctModalBg');
 const aErr = document.getElementById('aErr');
-let editingAcctId = null;
-
-async function refreshAdminUsersDropdown() {
-  try {
-    const res = await fetch('http://localhost:8000/admin/users', {
-      headers: { 'X-Token': localStorage.getItem('token') || '' },
-    });
-    if (res.ok) {
-      const all = await res.json();
-      adminUsers = all.filter(u => u.role === 'admin');
-    }
-  } catch {}
-  const sel = document.getElementById('aManager');
-  sel.innerHTML = '<option value="">不指定</option>' +
-    adminUsers.map(u => `<option value="${u.id}">${esc(u.username)}</option>`).join('');
-}
 
 function openAcctCreate() {
-  editingAcctId = null;
-  document.getElementById('acctModalTitle').textContent = '新增帐号';
-  ['aProvider','aBaseUrl','aBackend','aQuotaPath','aBalancePath','aCostPath','aTeam']
+  ['aProvider','aBaseUrl','aBackend','aQuotaTotalPath','aCostPath','aBalancePath']
     .forEach(id => document.getElementById(id).value = '');
-  document.getElementById('aManager').value = '';
   aErr.textContent = '';
-  refreshAdminUsersDropdown();
-  acctModalBg.classList.add('open');
-}
-
-function openAcctEdit(id) {
-  const a = allAccounts.find(x => x.id === id);
-  if (!a) return;
-  editingAcctId = id;
-  document.getElementById('acctModalTitle').textContent = '编辑帐号';
-  document.getElementById('aProvider').value = a.provider;
-  document.getElementById('aBaseUrl').value  = a.base_url;
-  document.getElementById('aBackend').value  = a.provider_backend_url || '';
-  document.getElementById('aQuotaPath').value   = a.quota_total_path || '';
-  document.getElementById('aBalancePath').value = a.balance_path || '';
-  document.getElementById('aCostPath').value    = a.cost_path || '';
-  document.getElementById('aTeam').value = a.team || '';
-  aErr.textContent = '';
-  refreshAdminUsersDropdown().then(() => {
-    document.getElementById('aManager').value = a.manager_user_id || '';
-  });
+  // provider datalist
+  const providers = [...new Set(allAccounts.map(a => a.provider).filter(Boolean))].sort();
+  document.getElementById('providerList').innerHTML =
+    providers.map(p => `<option value="${esc(p)}">`).join('');
   acctModalBg.classList.add('open');
 }
 
@@ -345,25 +439,46 @@ acctModalBg.addEventListener('click', e => {
   if (e.target === acctModalBg) acctModalBg.classList.remove('open');
 });
 
+// 选已有 provider 时自动填模板（带确认覆盖）
+document.getElementById('aProvider').addEventListener('change', () => {
+  const v = document.getElementById('aProvider').value.trim();
+  if (!v) return;
+  const matches = allAccounts.filter(a => a.provider === v);
+  if (!matches.length) return;
+  const tpl = matches[0];
+  const fields = ['aBaseUrl','aBackend','aQuotaTotalPath','aCostPath','aBalancePath'];
+  const anyFilled = fields.some(id => document.getElementById(id).value.trim());
+  if (anyFilled && !confirm(`检测到 provider "${v}" 已有 ${matches.length} 个帐号，应用其模板会覆盖已填字段？`)) return;
+  document.getElementById('aBaseUrl').value         = tpl.base_url || '';
+  document.getElementById('aBackend').value         = tpl.provider_backend_url || '';
+  document.getElementById('aQuotaTotalPath').value  = tpl.quota_total_path || '';
+  document.getElementById('aCostPath').value        = tpl.cost_path || '';
+  document.getElementById('aBalancePath').value     = tpl.balance_path || '';
+});
+
 document.getElementById('acctSaveBtn').addEventListener('click', async () => {
   aErr.textContent = '';
   const body = {
     provider:             document.getElementById('aProvider').value.trim(),
     base_url:             document.getElementById('aBaseUrl').value.trim(),
     provider_backend_url: document.getElementById('aBackend').value.trim(),
-    quota_total_path:     document.getElementById('aQuotaPath').value.trim(),
+    quota_total_path:     document.getElementById('aQuotaTotalPath').value.trim(),
     balance_path:         document.getElementById('aBalancePath').value.trim(),
     cost_path:            document.getElementById('aCostPath').value.trim(),
-    manager_user_id:      parseInt(document.getElementById('aManager').value) || null,
-    team:                 document.getElementById('aTeam').value.trim(),
+    manager_user_id:      null,
     is_active: 1,
   };
   if (!body.provider || !body.base_url) {
     aErr.textContent = '供应商和 Base URL 必填'; return;
   }
+  // 同 provider+base_url 重复提示
+  const dup = allAccounts.find(a => a.provider === body.provider && a.base_url === body.base_url);
+  if (dup) {
+    aErr.textContent = '已有相同供应商（provider + base_url 完全相同）';
+    return;
+  }
   try {
-    if (editingAcctId) await updateAccount(editingAcctId, body);
-    else await createAccount(body);
+    await createAccount(body);
     acctModalBg.classList.remove('open');
     await loadAll();
   } catch (e) {
@@ -371,158 +486,93 @@ document.getElementById('acctSaveBtn').addEventListener('click', async () => {
   }
 });
 
-// ── Modal B: 子帐号 ──────────────────────────────────────
-const subModalBg = document.getElementById('subModalBg');
-let editingSubId = null;
-let subModalContext = null; // {accountId, returnToKeyModal?}
-
-function openSubCreate(accountId, returnToKeyModal = false) {
-  editingSubId = null;
-  subModalContext = { accountId, returnToKeyModal };
-  document.getElementById('subModalTitle').textContent = '新增子帐号';
-  document.getElementById('sName').value = '';
-  document.getElementById('sDesc').value = '';
-  const accSel = document.getElementById('sAccount');
-  accSel.innerHTML = allAccounts.map(a =>
-    `<option value="${a.id}" ${a.id === accountId ? 'selected' : ''}>${esc(a.provider)} / ${esc(a.base_url)}</option>`
-  ).join('');
-  document.getElementById('sErr').textContent = '';
-  subModalBg.classList.add('open');
-}
-
-document.getElementById('subCancelBtn').addEventListener('click',
-  () => subModalBg.classList.remove('open'));
-subModalBg.addEventListener('click', e => {
-  if (e.target === subModalBg) subModalBg.classList.remove('open');
-});
-
-document.getElementById('subSaveBtn').addEventListener('click', async () => {
-  const errEl = document.getElementById('sErr');
-  errEl.textContent = '';
-  const accountId = parseInt(document.getElementById('sAccount').value);
-  const body = {
-    name: document.getElementById('sName').value.trim(),
-    description: document.getElementById('sDesc').value.trim(),
-  };
-  if (!body.name) { errEl.textContent = '名称不能为空'; return; }
-  try {
-    const newSub = editingSubId
-      ? await updateSubAccount(editingSubId, body)
-      : await createSubAccount(accountId, body);
-    subModalBg.classList.remove('open');
-    await loadAll();
-    if (subModalContext?.returnToKeyModal) {
-      keyModalBg.classList.add('open');
-      refreshKeyModalSubDropdown(accountId);
-      document.getElementById('kSub').value = newSub.id;
-    }
-  } catch (e) {
-    errEl.textContent = '保存失败:' + e.message;
-  }
-});
-
-// ── Modal C: API key ─────────────────────────────────────
+// ── Modal C: 新增 API key ────────────────────────────────
 const keyModalBg = document.getElementById('keyModalBg');
-let editingKeyId = null;
 
-function refreshKeyModalSubDropdown(accountId) {
-  const sub = document.getElementById('kSub');
-  const subs = allSubAccounts[accountId] || [];
-  sub.innerHTML = subs.length
-    ? subs.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')
-    : '<option value="">— 暂无,请先新建 —</option>';
+async function refreshKeyModalSubDropdown(accountId) {
+  const dl = document.getElementById('kSubList');
+  let subs = allSubAccounts[accountId];
+  if (!subs) {
+    try { subs = await listSubAccounts(accountId); allSubAccounts[accountId] = subs; }
+    catch { subs = []; }
+  }
+  dl.innerHTML = subs.map(s => `<option value="${esc(s.name)}">`).join('');
 }
 
-function openKeyCreate(presetSubId = null) {
-  editingKeyId = null;
-  document.getElementById('keyModalTitle').textContent = '新增 API key';
+function openKeyCreate() {
+  _importedCount = 0;
   document.getElementById('kName').value = '';
   document.getElementById('kKey').value = '';
+  document.getElementById('kSub').value = '';
+  document.getElementById('kManager').value = '';
   document.getElementById('kErr').textContent = '';
-  document.getElementById('kAccount').disabled = false;
-  document.getElementById('kSub').disabled = false;
+  document.getElementById('kImportStatus').textContent = '';
   const accSel = document.getElementById('kAccount');
-  accSel.innerHTML = allAccounts.map(a =>
+  // 按 provider+base_url 去重，仅保留每组中 id 最小的一条
+  const seen = new Set();
+  const uniq = [];
+  for (const a of [...allAccountOptions].sort((x, y) => x.id - y.id)) {
+    const key = `${a.provider}${a.base_url}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniq.push(a);
+  }
+  accSel.innerHTML = uniq.map(a =>
     `<option value="${a.id}">${esc(a.provider)} / ${esc(a.base_url)}</option>`
   ).join('');
-  if (presetSubId) {
-    for (const a of allAccounts) {
-      if ((allSubAccounts[a.id] || []).some(s => s.id === presetSubId)) {
-        accSel.value = a.id;
-        refreshKeyModalSubDropdown(a.id);
-        document.getElementById('kSub').value = presetSubId;
-        break;
-      }
-    }
-  } else if (allAccounts.length) {
-    refreshKeyModalSubDropdown(allAccounts[0].id);
-  }
+  if (uniq.length) refreshKeyModalSubDropdown(parseInt(accSel.value));
   keyModalBg.classList.add('open');
 }
 
-function openKeyEdit(keyId) {
-  let key = null, sub = null, acc = null;
-  for (const a of allAccounts) {
-    for (const s of allSubAccounts[a.id] || []) {
-      for (const k of allKeys[s.id] || []) {
-        if (k.id === keyId) { key = k; sub = s; acc = a; }
-      }
-    }
-  }
-  if (!key) return;
-  editingKeyId = keyId;
-  document.getElementById('keyModalTitle').textContent = '编辑 API key';
-  document.getElementById('kName').value = key.name;
-  document.getElementById('kKey').value = key.api_key;
-  document.getElementById('kErr').textContent = '';
-  const accSel = document.getElementById('kAccount');
-  accSel.innerHTML = `<option value="${acc.id}">${esc(acc.provider)} / ${esc(acc.base_url)}</option>`;
-  accSel.disabled = true;
-  refreshKeyModalSubDropdown(acc.id);
-  document.getElementById('kSub').value = sub.id;
-  document.getElementById('kSub').disabled = true;
-  keyModalBg.classList.add('open');
-}
-
+document.getElementById('addKeyBtn').addEventListener('click', () => {
+  if (!allAccountOptions.length) { alert('请先新增供应商'); return; }
+  openKeyCreate();
+});
 document.getElementById('kAccount').addEventListener('change', e => {
   refreshKeyModalSubDropdown(parseInt(e.target.value));
+  document.getElementById('kSub').value = '';
 });
-document.getElementById('kNewSubBtn').addEventListener('click', () => {
-  const accId = parseInt(document.getElementById('kAccount').value);
-  if (!accId) return;
-  keyModalBg.classList.remove('open');
-  openSubCreate(accId, /*returnToKeyModal=*/true);
-});
-document.getElementById('keyCancelBtn').addEventListener('click', () => {
-  keyModalBg.classList.remove('open');
-  document.getElementById('kAccount').disabled = false;
-  document.getElementById('kSub').disabled = false;
-});
+document.getElementById('keyCancelBtn').addEventListener('click',
+  () => keyModalBg.classList.remove('open'));
 keyModalBg.addEventListener('click', e => {
-  if (e.target === keyModalBg) {
-    keyModalBg.classList.remove('open');
-    document.getElementById('kAccount').disabled = false;
-    document.getElementById('kSub').disabled = false;
-  }
+  if (e.target === keyModalBg) keyModalBg.classList.remove('open');
 });
 
 document.getElementById('keySaveBtn').addEventListener('click', async () => {
   const errEl = document.getElementById('kErr');
   errEl.textContent = '';
-  const subId = parseInt(document.getElementById('kSub').value);
+  // Excel 已导入成功 → 保存按钮变成关闭+刷新
+  if (_importedCount > 0) {
+    keyModalBg.classList.remove('open');
+    await loadAll();
+    _importedCount = 0;
+    return;
+  }
+  const accId = parseInt(document.getElementById('kAccount').value);
+  const subName = document.getElementById('kSub').value.trim();
+  const managerName = document.getElementById('kManager').value.trim();
+  const managerUser = userList.find(u => u.username === managerName);
   const body = {
     name: document.getElementById('kName').value.trim(),
     api_key: document.getElementById('kKey').value.trim(),
     is_active: 1, exhausted: 0,
+    manager_user_id: managerUser ? managerUser.id : null,
   };
-  if (!subId) { errEl.textContent = '请先选择或新建子帐号'; return; }
+  if (!subName) { errEl.textContent = '请填写子帐号名称'; return; }
   if (!body.name || !body.api_key) { errEl.textContent = '名称和 key 必填'; return; }
+  if (!managerName) { errEl.textContent = '请填写管理员'; return; }
+  if (!managerUser) { errEl.textContent = `管理员用户不存在：${managerName}`; return; }
   try {
-    if (editingKeyId) await updateApiKey(editingKeyId, body);
-    else await createApiKey(subId, body);
+    let subId;
+    const existing = (allSubAccounts[accId] || []).find(s => s.name === subName);
+    if (existing) {
+      subId = existing.id;
+    } else {
+      const newSub = await createSubAccount(accId, { name: subName, description: '' });
+      subId = newSub.id;
+    }
+    await createApiKey(subId, body);
     keyModalBg.classList.remove('open');
-    document.getElementById('kAccount').disabled = false;
-    document.getElementById('kSub').disabled = false;
     await loadAll();
   } catch (e) {
     if ((e.message || '').includes('已存在')) {
@@ -533,109 +583,244 @@ document.getElementById('keySaveBtn').addEventListener('click', async () => {
   }
 });
 
+// 批量导入 Excel：先校验子帐号是否填写
+document.getElementById('kImportFile').addEventListener('change', async function () {
+  const file = this.files[0];
+  if (!file) return;
+  const errEl = document.getElementById('kErr');
+  const statusEl = document.getElementById('kImportStatus');
+  errEl.textContent = '';
+  statusEl.textContent = '';
+
+  const accId = parseInt(document.getElementById('kAccount').value);
+  const subName = document.getElementById('kSub').value.trim();
+  if (!subName) {
+    errEl.textContent = '请先填写子帐号名称';
+    this.value = '';
+    return;
+  }
+  let subId;
+  const existing = (allSubAccounts[accId] || []).find(s => s.name === subName);
+  if (existing) {
+    subId = existing.id;
+  } else {
+    try {
+      const newSub = await createSubAccount(accId, { name: subName, description: '' });
+      subId = newSub.id;
+    } catch (e) {
+      errEl.textContent = '创建子帐号失败：' + e.message;
+      this.value = ''; return;
+    }
+  }
+  statusEl.textContent = '导入中…';
+  statusEl.style.color = 'var(--text-muted)';
+  const managerName = document.getElementById('kManager').value.trim();
+  const managerUser = userList.find(u => u.username === managerName);
+  const fd = new FormData();
+  fd.append('file', file);
+  if (managerUser) fd.append('manager_user_id', managerUser.id);
+  try {
+    const res = await fetch(`http://localhost:8000/admin/sub-accounts/${subId}/api-keys/import-excel`, {
+      method: 'POST',
+      headers: { 'X-Token': localStorage.getItem('platform_token') || '' },
+      body: fd,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    const skipped = data.skipped_duplicates?.length || 0;
+    const errCount = data.errors?.length || 0;
+    const summary = `导入完成：成功 ${data.imported} 条${skipped ? `，跳过重复 ${skipped} 条` : ''}${errCount ? `，失败 ${errCount} 条` : ''}`;
+
+    if (data.imported > 0) {
+      // 导入成功 → 保留弹窗、显示状态、置 importedCount，让"保存"按钮变成"关闭"行为
+      _importedCount = data.imported;
+      statusEl.style.color = 'var(--green)';
+      let msg = summary + '\n点击下方"保存"按钮关闭并查看新增数据';
+      if (errCount > 0) {
+        msg += '\n失败详情：' + data.errors.slice(0, 3).map(e => `第${e.row}行：${e.reason}`).join('；')
+             + (errCount > 3 ? ` ...等共 ${errCount} 条` : '');
+      }
+      statusEl.textContent = msg;
+      statusEl.style.whiteSpace = 'pre-line';
+    } else {
+      // 没有任何成功 → 保留弹窗、显示失败原因
+      statusEl.style.color = '#dc2626';
+      statusEl.textContent = summary;
+      if (errCount > 0) {
+        const details = data.errors.slice(0, 3).map(e => `第${e.row}行：${e.reason}`).join('；');
+        errEl.textContent = '失败原因：' + details + (errCount > 3 ? ` ...等共 ${errCount} 条` : '');
+      }
+    }
+  } catch (e) {
+    statusEl.style.color = '#dc2626';
+    statusEl.textContent = '导入失败：' + e.message;
+  }
+  this.value = '';
+});
+
+// ── Modal D: 统一编辑 ────────────────────────────────────
+const editModalBg = document.getElementById('editModalBg');
+const eErr = document.getElementById('eErr');
+let editingKeyId = null;
+let editingAcctId = null;
+
+function openEditModal(keyId) {
+  let key = null, sub = null, acc = null;
+  for (const a of allAccounts) {
+    for (const s of allSubAccounts[a.id] || []) {
+      for (const k of allKeys[s.id] || []) {
+        if (k.id === keyId) { key = k; sub = s; acc = a; }
+      }
+    }
+  }
+  if (!key) return;
+  editingKeyId  = keyId;
+  editingAcctId = acc.id;
+
+  document.getElementById('eProvider').value   = acc.provider;
+  document.getElementById('eBaseUrl').value    = acc.base_url || '';
+  document.getElementById('eBackend').value    = acc.provider_backend_url || '';
+  document.getElementById('eAcctManager').value = acc.manager_username || '';
+  document.getElementById('eQuotaTotalPath').value = acc.quota_total_path || '';
+  document.getElementById('eCostPath').value       = acc.cost_path || '';
+  document.getElementById('eBalancePath').value    = acc.balance_path || '';
+
+  document.getElementById('eKeyName').value    = key.name;
+  document.getElementById('eKeyVal').value     = key.api_key;
+  document.getElementById('eKeySub').value     = sub.name;
+
+  const acctEditable = isAdmin || acc.created_by === user.id || acc.manager_user_id === user.id;
+  ['eBaseUrl','eBackend','eAcctManager','eQuotaTotalPath','eCostPath','eBalancePath'].forEach(id => {
+    document.getElementById(id).readOnly = !acctEditable;
+    document.getElementById(id).style.background = acctEditable ? '' : 'var(--surface)';
+  });
+
+  eErr.textContent = '';
+  editModalBg.classList.add('open');
+}
+
+document.getElementById('editCancelBtn').addEventListener('click',
+  () => editModalBg.classList.remove('open'));
+editModalBg.addEventListener('click', e => {
+  if (e.target === editModalBg) editModalBg.classList.remove('open');
+});
+
+document.getElementById('editSaveBtn').addEventListener('click', async () => {
+  eErr.textContent = '';
+  if (!editingKeyId || !editingAcctId) return;
+
+  const acc = allAccounts.find(a => a.id === editingAcctId);
+  const acctEditable = isAdmin || acc.created_by === user.id || acc.manager_user_id === user.id;
+
+  // 1) 更新供应商（仅当字段变化且有权限）
+  if (acctEditable) {
+    const newMgrName = document.getElementById('eAcctManager').value.trim();
+    let newMgrId = null;
+    if (newMgrName) {
+      const m = userList.find(u => u.username === newMgrName);
+      if (!m) { eErr.textContent = '管理员用户不存在：' + newMgrName; return; }
+      newMgrId = m.id;
+    }
+    const acctBody = {
+      provider:             acc.provider,
+      base_url:             document.getElementById('eBaseUrl').value.trim(),
+      provider_backend_url: document.getElementById('eBackend').value.trim(),
+      quota_total_path:     document.getElementById('eQuotaTotalPath').value.trim(),
+      balance_path:         document.getElementById('eBalancePath').value.trim(),
+      cost_path:            document.getElementById('eCostPath').value.trim(),
+      is_active: acc.is_active ?? 1,
+      manager_user_id: newMgrId,
+      team: acc.team || '',
+      models: acc.models || '',
+    };
+    const changed =
+      acctBody.base_url             !== (acc.base_url || '') ||
+      acctBody.provider_backend_url !== (acc.provider_backend_url || '') ||
+      acctBody.quota_total_path     !== (acc.quota_total_path || '') ||
+      acctBody.balance_path         !== (acc.balance_path || '') ||
+      acctBody.cost_path            !== (acc.cost_path || '') ||
+      (acctBody.manager_user_id ?? null) !== (acc.manager_user_id ?? null);
+    if (changed) {
+      try { await updateAccount(editingAcctId, acctBody); }
+      catch (e) { eErr.textContent = '保存供应商失败：' + e.message; return; }
+    }
+  }
+
+  // 2) 更新 API key（manager_user_id 沿用原值，编辑面板不再单独维护）
+  let key = null;
+  for (const subId of Object.keys(allKeys)) {
+    const found = allKeys[subId].find(k => k.id === editingKeyId);
+    if (found) { key = found; break; }
+  }
+  const keyBody = {
+    name: document.getElementById('eKeyName').value.trim(),
+    api_key: document.getElementById('eKeyVal').value.trim(),
+    is_active: key?.is_active ?? 1,
+    exhausted: key?.exhausted ?? 0,
+    manager_user_id: key?.manager_user_id ?? null,
+  };
+  if (!keyBody.name || !keyBody.api_key) {
+    eErr.textContent = 'API 名称和 key 必填'; return;
+  }
+  try {
+    await updateApiKey(editingKeyId, keyBody);
+    editModalBg.classList.remove('open');
+    await loadAll();
+  } catch (e) {
+    eErr.textContent = '保存 key 失败：' + e.message;
+  }
+});
+
 async function onDelKey(keyId) {
   if (!confirm('确认删除此 API key?')) return;
   try {
     await deleteApiKey(keyId);
     await loadAll();
   } catch (e) {
-    if ((e.message || '').includes('调用')) {
-      alert('该 key 已被调用,不能删除');
+    if ((e.message || '').includes('调用')) alert('该 key 已被调用,不能删除');
+    else alert('删除失败:' + e.message);
+  }
+}
+
+// ── Spec 2: 余额实时刷新 ──────────────────────────────────
+async function refreshQuotaInline() {
+  let data;
+  try {
+    const res = await fetch('http://localhost:8000/admin/accounts/quota-all',
+      { headers: { 'X-Token': localStorage.getItem('platform_token') || '' } });
+    if (!res.ok) return;
+    data = await res.json();
+  } catch { return; }
+  for (const [keyIdStr, q] of Object.entries(data.results || {})) {
+    const tr = document.querySelector(`tr[data-key-id="${keyIdStr}"]`);
+    if (!tr) continue;
+    const totalCell   = tr.querySelector('[data-col="total"]');
+    const balanceCell = tr.querySelector('[data-col="balance"]');
+    if (!totalCell || !balanceCell) continue;
+    if (q.error) {
+      totalCell.title = q.error; balanceCell.title = q.error;
+      totalCell.textContent = '--'; balanceCell.textContent = '--';
+      continue;
+    }
+    const totalDisp = q.total != null ? q.total : '--';
+    const balDisp   = q.balance != null ? q.balance : '--';
+    if (q.exhausted) {
+      const stamp = (q.cached_at || '').slice(0, 10);
+      totalCell.textContent   = totalDisp;
+      balanceCell.textContent = '已用完';
+      balanceCell.title       = `截至 ${stamp}`;
+      balanceCell.style.color = '#dc2626';
     } else {
-      alert('删除失败:' + e.message);
+      totalCell.textContent   = totalDisp;
+      balanceCell.textContent = balDisp;
     }
   }
 }
 
-document.getElementById('addKeyBtn').addEventListener('click', () => openKeyCreate());
-
-// ── 列筛选 ──────────────────────────────────────────────
-async function refreshFilterDropdowns() {
-  const providers = [...new Set(allAccounts.map(a => a.provider).filter(Boolean))].sort();
-  const teams     = [...new Set(allAccounts.map(a => a.team).filter(Boolean))].sort();
-  const managers  = [...new Set(allAccounts.map(a => a.manager_username).filter(Boolean))].sort();
-  const creators  = [...new Set(allAccounts.map(a => a.creator_username).filter(Boolean))].sort();
-  const subs      = [...new Set(Object.values(allSubAccounts).flat().map(s => s.name).filter(Boolean))].sort();
-
-  const fill = (sel, opts) => {
-    const el = document.querySelector(`[data-filter="${sel}"]`);
-    if (!el) return;
-    const cur = el.value;
-    el.innerHTML = '<option value="">全部</option>' +
-      opts.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
-    el.value = cur;
-  };
-  fill('provider', providers);
-  fill('team',     teams);
-  fill('manager',  managers);
-  fill('creator',  creators);
-  fill('sub_account', subs);
-}
-
-function applyFilters(rows) {
-  const f = {};
-  document.querySelectorAll('[data-filter]').forEach(el => {
-    const v = el.value.trim();
-    if (v) f[el.dataset.filter] = v;
-  });
-  return rows.filter(r => {
-    const a = r.account, s = r.sub, k = r.key;
-    if (f.provider && a.provider !== f.provider) return false;
-    if (f.team && a.team !== f.team) return false;
-    if (f.manager && a.manager_username !== f.manager) return false;
-    if (f.creator && a.creator_username !== f.creator) return false;
-    if (f.sub_account && (!s || s.name !== f.sub_account)) return false;
-    if (f.base_url && !(a.base_url || '').includes(f.base_url)) return false;
-    if (f.backend && !(a.provider_backend_url || '').includes(f.backend)) return false;
-    if (f.quota_total && !(a.quota_total_path || '').includes(f.quota_total)) return false;
-    if (f.balance && !(a.balance_path || '').includes(f.balance)) return false;
-    if (f.cost && !(a.cost_path || '').includes(f.cost)) return false;
-    if (f.api_name && !(k?.name || '').includes(f.api_name)) return false;
-    if (f.api_key && !(k?.api_key || '').includes(f.api_key)) return false;
-    return true;
-  });
-}
-
-document.getElementById('filterRow').addEventListener('input', () => renderTable());
-document.getElementById('filterRow').addEventListener('change', () => renderTable());
-
-// ── 入口 ──────────────────────────────────────────────────
 document.getElementById('reloadBtn').addEventListener('click', loadAll);
 
-if (isAdmin) {
-  document.getElementById('adminSection').style.display = 'block';
-  loadAll();
-} else {
-  document.getElementById('userSection').style.display = 'block';
-  loadUserKeys();
-}
-
-// ── 普通用户：已授权密钥 ──────────────────────────────────
-async function loadUserKeys() {
-  const res = await fetch('http://localhost:8000/api-requests/approved', { headers: authHeaders() });
-  const list = await res.json().catch(() => []);
-  const tbody = document.getElementById('userTbody');
-  if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:32px">暂无已授权的密钥，请先<a href="apply.html" style="color:var(--green);margin:0 4px">提交申请</a></td></tr>';
-    return;
-  }
-  tbody.innerHTML = list.map(c => {
-    const subName    = c.sub_account_name || '—';
-    const subModels  = c.sub_models ? c.sub_models.split(',').filter(Boolean).join('、') : (c.name ? '继承父配置' : '—');
-    const quota      = c.quota_type === 'unlimited' ? '无限' : (c.quota_type === 'amount' ? `¥${c.quota_amount}` : '—');
-    const ip         = c.ip_restriction || '不限制';
-    return `<tr>
-      <td>${c.name}</td>
-      <td>${c.provider}</td>
-      <td><span class="badge ${c.sub_account_id ? 'badge-green' : 'badge-gray'}">${subName}</span></td>
-      <td style="font-size:.82rem;color:var(--text-muted)">${subModels}</td>
-      <td style="font-size:.82rem">${quota}</td>
-      <td style="font-size:.82rem;color:var(--text-muted)">${ip}</td>
-      <td><span class="badge badge-green">已启用</span></td>
-      <td>${c.created_at ? c.created_at.slice(0,10) : '—'}</td>
-    </tr>`;
-  }).join('');
-}
+await loadUsers();
+loadAll();
 </script>
 </body>
 </html>

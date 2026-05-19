@@ -62,8 +62,7 @@
       </div>
       <div class="sidebar-children">
         <a href="claude.html"  class="sidebar-item">API调用</a>
-        <a href="apply.html"   class="sidebar-item">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item sidebar-admin" id="keysLink">密钥管理</a>
+        <a href="apply.html"   class="sidebar-item">API管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
         <a href="users.html"   class="sidebar-item sidebar-admin" id="usersLink">用户管理</a>
       </div>
@@ -115,13 +114,7 @@ const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 
 
 const isEmbed = document.documentElement.classList.contains('embed-mode');
 
-if (!isEmbed) {
-  document.getElementById('userBar').innerHTML = `
-    <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
-    <button class="logout" id="logoutBtn">退出</button>`;
-  document.getElementById('logoutBtn').addEventListener('click', () => logout());
-  if (isAdmin) { const l = document.getElementById('usersLink'); if(l) l.style.display='block'; const k = document.getElementById('keysLink'); if(k) k.style.display='block'; }
-}
+if (!isEmbed) {}
 
 let sessions = [];
 let selectedSession = null;

@@ -1,0 +1,94 @@
+import os
+import json
+import base64
+import pathlib
+import http.client
+import pandas as pd
+
+# ── 读取 Excel ──────────────────────────────────────────
+INPUT_FILE = "/Users/hw-edit/Desktop/h00484736/api-web-project/批处理.xlsx"
+df = pd.read_excel(INPUT_FILE)
+print(f"数据形状: {df.shape}")
+print(f"列名: {list(df.columns)}")
+print(df.head())
+
+# ── 带图片的 chat 函数 ──────────────────────────────────
+def chat_with_image(image_path, instruction, model=None):
+    """发送图片+指令给 AI，返回文本结果。"""
+    image_path = image_path.strip()
+    if not os.path.exists(image_path):
+        return f"[错误] 文件不存在: {image_path}"
+
+    ext = pathlib.Path(image_path).suffix.lstrip(".").lower()
+    mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
+    media_type = mime_map.get(ext, "image/jpeg")
+
+    with open(image_path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode()
+
+    content = [
+        {"type": "image", "source": {"type": "base64",
+                                    "media_type": media_type,
+                                    "data": img_b64}},
+        {"type": "text", "text": str(instruction)},
+    ]
+
+    payload = json.dumps({
+        "messages": [{"role": "user", "content": content}],
+        "model": model or AI_MODEL,
+        "system": "",
+        "config_id": _CFG_ID,
+        "request_id": _REQ_ID,
+        "user_token": _TOKEN,
+    }).encode()
+
+    conn = http.client.HTTPConnection("localhost", 8000, timeout=120)
+    conn.request("POST", "/chat", body=payload,
+                headers={"Content-Type": "application/json", "X-Token":
+_TOKEN})
+    resp = conn.getresponse()
+
+    result = ""
+    buf = b""
+    while True:
+        chunk = resp.read(512)
+        if not chunk:
+            break
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            line = line.decode("utf-8", errors="replace").strip()
+            if line.startswith("data: "):
+                raw = line[6:]
+                if raw == "[DONE]":
+                    break
+                try:
+                    msg = json.loads(raw)
+                    if msg.get("text"):
+                        result += msg["text"]
+                    if msg.get("error"):
+                        result = f"[错误] {msg['error']}"
+                except Exception:
+                    pass
+    conn.close()
+    return result
+
+# ── 逐行处理 ────────────────────────────────────────────
+total = len(df)
+for i, row in df.iterrows():
+    image_path  = str(row["图片路径"]).strip()
+    instruction = str(row["自定义指令"]).strip()
+    print(f"\n[{i+1}/{total}] 处理: {os.path.basename(image_path)}")
+    print(f"  指令: {instruction}")
+
+    result = chat_with_image(image_path, instruction)
+    df.at[i, "识别结果"] = result
+    record_row(i, input=row.to_dict(), output=result)
+    print(f"  结果: {result[:100]}{'…' if len(result)>100 else ''}")
+
+# ── 保存结果 ────────────────────────────────────────────
+output_path = os.path.join(WORK_DIR, "批处理_结果.xlsx")
+df.to_excel(output_path, index=False)
+save_file(output_path)
+print(f"\n✅ 全部完成，结果已保存: {output_path}")

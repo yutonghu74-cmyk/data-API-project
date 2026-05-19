@@ -23,7 +23,10 @@ parser.add_argument('--run-id',    required=True)
 parser.add_argument('--script',    required=True)
 parser.add_argument('--work-dir',  required=True)
 parser.add_argument('--token',     required=True)
-parser.add_argument('--config-id', default='')
+parser.add_argument('--config-id',  default='')
+parser.add_argument('--request-id', default='')
+parser.add_argument('--job-id',     default='')
+parser.add_argument('--resume-done-csv', default='')
 parser.add_argument('--model',     default='')
 parser.add_argument('--file-path', default='')
 parser.add_argument('--timeout',   type=int, default=30)
@@ -35,7 +38,16 @@ def emit(obj):
 
 # ── Bootstrap 代码（注入到用户脚本前）────────────────────
 def build_bootstrap() -> str:
-    config_id_val = args.config_id if args.config_id else 'None'
+    config_id_val  = args.config_id  if args.config_id  else 'None'
+    request_id_val = args.request_id if args.request_id else 'None'
+    job_id_val     = args.job_id     if args.job_id     else 'None'
+    resume_done_repr = "set()"
+    if args.resume_done_csv:
+        try:
+            ids = [int(x) for x in args.resume_done_csv.split(",") if x.strip()]
+            resume_done_repr = "{" + ", ".join(str(i) for i in ids) + "}" if ids else "set()"
+        except Exception:
+            resume_done_repr = "set()"
 
     if args.file_path and os.path.exists(args.file_path):
         ext = pathlib.Path(args.file_path).suffix.lower()
@@ -62,6 +74,9 @@ WORK_DIR  = r"{args.work_dir}"
 AI_MODEL  = "{args.model}"
 _TOKEN    = "{args.token}"
 _CFG_ID   = {config_id_val}
+_REQ_ID   = {request_id_val}
+_JOB_ID   = {job_id_val}
+_RESUME_DONE = {resume_done_repr}
 
 # 安全 os 代理（只暴露文件路径操作，禁止 system/exec）
 class _SafeOS:
@@ -78,13 +93,51 @@ os = _SafeOS()
 {load_df}
 
 # ── 注入函数 ──────────────────────────────────────────────
+def _to_image_block(path):
+    """把本地图片路径转 Anthropic image content block。失败返回 None。"""
+    try:
+        with open(path, "rb") as f:
+            data = _b64.b64encode(f.read()).decode()
+        ext = _pl.Path(path).suffix.lstrip(".").lower() or "png"
+        mime = {{"jpg":"jpeg","jpeg":"jpeg","png":"png","gif":"gif","webp":"webp"}}.get(ext, "png")
+        return {{"type": "image", "source": {{"type": "base64", "media_type": f"image/{{mime}}", "data": data}}}}
+    except Exception:
+        return None
+
+def _is_image_path(s):
+    if not isinstance(s, str): return False
+    if len(s) > 1024: return False
+    low = s.strip().lower()
+    if not low.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")): return False
+    return _os.path.exists(s.strip())
+
 def chat(prompt, model=None):
-    """调 AI 代理，同步阻塞，返回完整文本。"""
+    """调 AI 代理。prompt 支持：
+       - str：纯文本
+       - list[str|dict]：自动把图片路径或 dict({{"image": "/path"}}) 转成 image block
+    """
+    if isinstance(prompt, list):
+        blocks = []
+        for item in prompt:
+            if isinstance(item, dict) and item.get("image"):
+                blk = _to_image_block(item["image"])
+                if blk: blocks.append(blk)
+                else: blocks.append({{"type": "text", "text": f"[图片读取失败: {{item['image']}}]"}})
+            elif isinstance(item, str) and _is_image_path(item):
+                blk = _to_image_block(item)
+                if blk: blocks.append(blk)
+                else: blocks.append({{"type": "text", "text": item}})
+            else:
+                blocks.append({{"type": "text", "text": str(item)}})
+        content = blocks
+    else:
+        content = str(prompt)
     payload = _json.dumps({{
-        "messages": [{{"role": "user", "content": str(prompt)}}],
+        "messages": [{{"role": "user", "content": content}}],
         "model": model or AI_MODEL,
         "system": "",
         "config_id": _CFG_ID,
+        "request_id": _REQ_ID,
         "user_token": _TOKEN,
     }}).encode()
     conn = _hc.HTTPConnection("localhost", 8000, timeout=120)
@@ -92,6 +145,7 @@ def chat(prompt, model=None):
                  headers={{"Content-Type": "application/json", "X-Token": _TOKEN}})
     resp = conn.getresponse()
     result = ""
+    err_msg = None
     buf = b""
     while True:
         chunk = resp.read(512)
@@ -109,9 +163,13 @@ def chat(prompt, model=None):
                     msg = _json.loads(raw)
                     if msg.get("text"):
                         result += msg["text"]
+                    elif msg.get("error"):
+                        err_msg = msg["error"]
                 except Exception:
                     pass
     conn.close()
+    if err_msg and not result:
+        raise RuntimeError(err_msg)
     return result
 
 def show_image(path):
@@ -120,6 +178,44 @@ def show_image(path):
     ext = _pl.Path(path).suffix.lstrip(".") or "png"
     mime = {{"jpg":"jpeg","jpeg":"jpeg","png":"png","gif":"gif","webp":"webp"}}.get(ext, "png")
     print(f"__IMG__data:image/{{mime}};base64,{{data}}", flush=True)
+
+def record_row(idx, input=None, output="", success=True, error="", started_at=None, finished_at=None):
+    """记录单行处理结果。若 _JOB_ID 已知,直接写入 batch_job_rows;否则仅 emit 事件供 SSE。"""
+    from datetime import datetime as _dt, timezone as _tz
+    import math as _math
+    def _clean_nan(o):
+        if isinstance(o, float) and (_math.isnan(o) or _math.isinf(o)): return None
+        if isinstance(o, dict): return {{k: _clean_nan(v) for k, v in o.items()}}
+        if isinstance(o, (list, tuple)): return [_clean_nan(x) for x in o]
+        return o
+    now_iso = _dt.now(_tz.utc).isoformat()
+    if started_at is None: started_at = now_iso
+    if finished_at is None: finished_at = now_iso
+    payload = {{
+        "idx": int(idx) if isinstance(idx, (int, float)) else 0,
+        "input": _clean_nan(input) if input is not None else {{}},
+        "output": str(output) if output is not None else "",
+        "success": 1 if success else 0,
+        "error": str(error) if error else "",
+        "started_at": started_at,
+        "finished_at": finished_at,
+    }}
+    if _JOB_ID is not None:
+        try:
+            body = _json.dumps({{
+                "job_id": _JOB_ID, "row_index": payload["idx"],
+                "input_json": _json.dumps(payload["input"], ensure_ascii=False, default=str),
+                "output_text": payload["output"], "output_type": "text", "output_path": "",
+                "label": "", "success": payload["success"], "error_msg": payload["error"],
+                "started_at": payload["started_at"], "finished_at": payload["finished_at"],
+            }}).encode()
+            conn = _hc.HTTPConnection("localhost", 8000, timeout=15)
+            conn.request("POST", "/batch2/rows", body=body,
+                         headers={{"Content-Type":"application/json","X-Token":_TOKEN}})
+            conn.getresponse().read(); conn.close()
+        except Exception:
+            pass
+    print(f"__ROW__{{_json.dumps(payload, ensure_ascii=False, default=str)}}", flush=True)
 
 def show_chart(fig):
     buf = _io.BytesIO()
@@ -210,6 +306,12 @@ def process_line(line: str, is_err: bool):
         size = int(parts[1]) if len(parts) > 1 else 0
         file_count += 1
         emit({"type": "file", "run_id": args.run_id, "name": name, "size": size})
+    elif line.startswith("__ROW__"):
+        try:
+            data = json.loads(line[7:])
+        except Exception:
+            data = {}
+        emit({"type": "row", **data})
     else:
         emit({"type": "stdout", "text": line + "\n"})
 

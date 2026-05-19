@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>API申请&审核 — 数据平台</title>
+  <title>API管理 — 数据平台</title>
   <link rel="stylesheet" href="../assets/css/platform.css">
   <style>
     .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
@@ -15,6 +15,30 @@
     .tab.active { color: var(--green); border-bottom-color: var(--green); font-weight: 500; }
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
+    .candidate-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    .candidate-table th, .candidate-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+    .candidate-table th { background: var(--surface); font-weight: 500; }
+    .candidate-table tr:hover td { background: var(--green-bg); }
+
+    /* ── 表头筛选(参考 keys.html) ─────────────────────────── */
+    .th-filter { position: relative; white-space: nowrap; }
+    .filter-btn {
+      background: none; border: none; cursor: pointer;
+      font-size: .72rem; color: var(--text-muted);
+      padding: 0 2px; vertical-align: middle; margin-left: 4px;
+    }
+    .filter-btn:hover, .filter-btn.active { color: var(--green); }
+    .filter-pop {
+      position: absolute; top: 100%; left: 0; z-index: 200;
+      background: #fff; border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,.12);
+      min-width: 180px;
+    }
+    .filter-pop input, .filter-pop select {
+      width: 100%; font-size: .82rem; padding: 4px 6px;
+      border: 1px solid var(--border); border-radius: 4px;
+    }
   </style>
 </head>
 <body>
@@ -36,8 +60,7 @@
       </div>
       <div class="sidebar-children">
         <a href="claude.html"  class="sidebar-item">API调用</a>
-        <a href="apply.html"   class="sidebar-item active">API申请&审核</a>
-        <a href="keys.html"    class="sidebar-item sidebar-admin" id="keysLink">密钥管理</a>
+        <a href="apply.html"   class="sidebar-item active">API管理</a>
         <a href="stats.html"   class="sidebar-item">使用统计</a>
         <a href="users.html"   class="sidebar-item sidebar-admin" id="usersLink">用户管理</a>
       </div>
@@ -46,29 +69,39 @@
 
   <!-- 主内容 -->
   <div class="main">
-<div class="breadcrumb">
+<div class="breadcrumb" style="margin-bottom:10px">
   <a href="#">三方API管理</a>
   <span class="sep">›</span>
-  <span class="current">API申请&审核</span>
+  <span class="current">API管理</span>
 </div>
 
-    <div class="toolbar">
-      <span class="page-title" style="margin:0">API申请&审核</span>
-      <button class="btn btn-primary" id="applyBtn">+ 新增申请</button>
-    </div>
-
-    <!-- Tab（管理员多一个「审核管理」） -->
+    <!-- Tab（审核 tab 所有登录用户可见，由后端按 reviewer_id=self 过滤） -->
     <div class="tabs" id="tabBar">
-      <button class="tab active" data-tab="my">我的申请</button>
+      <button class="tab active" data-tab="my">API申请</button>
+      <button class="tab" data-tab="review">API审核</button>
+      <button class="tab" data-tab="keys">密钥管理</button>
     </div>
 
     <!-- 我的申请 -->
     <div class="tab-panel active" id="tab-my">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+        <button class="btn btn-primary" id="applyBtn">+ 新增申请</button>
+      </div>
       <div class="card" style="padding:0;overflow:hidden">
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>API名称</th><th>供应商</th><th>需求项目</th><th>审核人</th><th>抄送人</th><th>状态</th><th>申请时间</th><th>审核意见</th></tr>
+              <tr>
+                <th class="th-filter" data-tbl="my">供应商<button class="filter-btn" data-tbl="my" data-fcol="provider">⌄</button></th>
+                <th class="th-filter" data-tbl="my">API名称<button class="filter-btn" data-tbl="my" data-fcol="api_key_name">⌄</button></th>
+                <th class="th-filter" data-tbl="my">审批人<button class="filter-btn" data-tbl="my" data-fcol="manager">⌄</button></th>
+                <th class="th-filter" data-tbl="my">需求项目<button class="filter-btn" data-tbl="my" data-fcol="project_name">⌄</button></th>
+                <th class="th-filter" data-tbl="my">负责人<button class="filter-btn" data-tbl="my" data-fcol="lead">⌄</button></th>
+                <th class="th-filter" data-tbl="my">申请额度<button class="filter-btn" data-tbl="my" data-fcol="budget">⌄</button></th>
+                <th class="th-filter" data-tbl="my">状态<button class="filter-btn" data-tbl="my" data-fcol="status">⌄</button></th>
+                <th class="th-filter" data-tbl="my">申请时间<button class="filter-btn" data-tbl="my" data-fcol="created_at">⌄</button></th>
+                <th class="th-filter" data-tbl="my">审核意见<button class="filter-btn" data-tbl="my" data-fcol="review_note">⌄</button></th>
+              </tr>
             </thead>
             <tbody id="myTbody"></tbody>
           </table>
@@ -76,42 +109,58 @@
       </div>
     </div>
 
-    <!-- 审核管理（仅管理员） -->
+    <!-- 审核管理（仅管理员/manager） -->
     <div class="tab-panel" id="tab-review">
       <div class="card" style="padding:0;overflow:hidden">
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>用户</th><th>API</th><th>需求项目</th><th>需求目的</th><th>负责人</th><th>预算</th><th>审核人</th><th>状态</th><th>申请时间</th><th>操作</th></tr>
+              <tr>
+                <th class="th-filter" data-tbl="rv">用户<button class="filter-btn" data-tbl="rv" data-fcol="username">⌄</button></th>
+                <th class="th-filter" data-tbl="rv">供应商<button class="filter-btn" data-tbl="rv" data-fcol="provider">⌄</button></th>
+                <th class="th-filter" data-tbl="rv">API名称<button class="filter-btn" data-tbl="rv" data-fcol="api_key_name">⌄</button></th>
+                <th class="th-filter" data-tbl="rv">审批人<button class="filter-btn" data-tbl="rv" data-fcol="manager">⌄</button></th>
+                <th class="th-filter" data-tbl="rv">需求项目<button class="filter-btn" data-tbl="rv" data-fcol="project_name">⌄</button></th>
+                <th class="th-filter" data-tbl="rv">负责人<button class="filter-btn" data-tbl="rv" data-fcol="lead">⌄</button></th>
+                <th class="th-filter" data-tbl="rv">申请额度<button class="filter-btn" data-tbl="rv" data-fcol="budget">⌄</button></th>
+                <th class="th-filter" data-tbl="rv">状态<button class="filter-btn" data-tbl="rv" data-fcol="status">⌄</button></th>
+                <th class="th-filter" data-tbl="rv">申请时间<button class="filter-btn" data-tbl="rv" data-fcol="created_at">⌄</button></th>
+                <th>操作</th>
+              </tr>
             </thead>
             <tbody id="reviewTbody"></tbody>
           </table>
         </div>
       </div>
     </div>
+
+    <!-- 密钥管理（嵌入 keys.html 作为子页面） -->
+    <div class="tab-panel" id="tab-keys">
+      <iframe id="keysFrame" src="" style="width:100%;height:calc(100vh - 220px);border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe>
+    </div>
   </div>
 </div>
-
-<!-- 新增申请弹窗 -->
 <div class="modal-bg" id="modalBg">
-  <div class="modal">
+  <div class="modal" style="width:520px">
     <h3>新增 API 申请</h3>
-    <div class="form-group"><label>选择 API</label><select id="fConfig"></select></div>
-    <div class="form-group" id="fManagerGroup" style="display:none">
-      <label>审核人</label>
-      <input id="fManagerDisplay" readonly style="background:var(--surface);color:var(--text-muted);cursor:default">
+    <div class="form-group">
+      <label>审批人</label>
+      <select id="fManager"><option value="">— 请选择审批人 —</option></select>
     </div>
+    <div class="form-group">
+      <label>供应商</label>
+      <select id="fProvider" disabled><option value="">— 请先选择审批人 —</option></select>
+    </div>
+    <div id="fAccountPreview" style="font-size:.82rem;color:var(--text-muted);margin:-6px 0 10px;min-height:16px"></div>
     <div class="form-group"><label>需求项目</label><input id="fProject" placeholder="请输入项目名称" autocomplete="off"></div>
-    <div class="form-group"><label>需求目的</label><textarea id="fPurpose" rows="2" placeholder="请描述使用目的" autocomplete="off"></textarea></div>
-    <div class="form-group"><label>项目负责人</label><input id="fLead" placeholder="请输入负责人姓名" autocomplete="off"></div>
-    <div class="form-group"><label>需求预算</label><input id="fBudget" placeholder="如：10000元" autocomplete="off"></div>
-    <div class="form-group">
-      <label>抄送人 <span style="color:var(--text-muted);font-weight:400">（可选，多人用逗号分隔）</span></label>
-      <input id="fCc" placeholder="如：张三,李四" autocomplete="off">
+    <div class="form-group"><label>需求详情</label>
+      <textarea id="fPurpose" rows="3" placeholder="简要描述用途、调用模型、预计量级等"></textarea>
     </div>
+    <div class="form-group"><label>需求预算</label><input id="fBudget" placeholder="如：10000元" autocomplete="off"></div>
+    <div class="form-group"><label>项目负责人</label><input id="fLead" placeholder="请输入负责人姓名" autocomplete="off"></div>
     <div class="form-group">
-      <label>子账号 <span style="color:var(--text-muted);font-weight:400">（可选，多个用逗号分隔）</span></label>
-      <input id="fSub" placeholder="子账号1,子账号2">
+      <label>抄送人 <span style="color:var(--text-muted);font-weight:400">（可选）</span></label>
+      <input id="fCc" placeholder="如：张三,李四" autocomplete="off">
     </div>
     <p style="color:#dc2626;font-size:.83rem;min-height:18px" id="modalErr"></p>
     <div class="modal-actions">
@@ -121,19 +170,28 @@
   </div>
 </div>
 
-<!-- 审核弹窗 -->
+<!-- 审核弹窗（candidate-keys 表格） -->
 <div class="modal-bg" id="reviewBg">
-  <div class="modal">
+  <div class="modal" style="width:640px">
     <h3>审核申请</h3>
-    <div class="form-group">
-      <label>分配子账号 <span style="color:var(--text-muted);font-weight:400">（通过时可选）</span></label>
-      <select id="reviewSubAccount"><option value="">— 不分配子账号 —</option></select>
+    <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:12px">选择要分配的 API key（通过时必选）：</p>
+    <div style="overflow:auto;max-height:260px;border:1px solid var(--border);border-radius:var(--radius)">
+      <table class="candidate-table">
+        <thead>
+          <tr><th>选择</th><th>子帐号</th><th>API名称</th><th>总额</th><th>余额</th></tr>
+        </thead>
+        <tbody id="candidateTbody">
+          <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px">加载中…</td></tr>
+        </tbody>
+      </table>
     </div>
-    <div class="form-group"><label>审核意见（可选）</label><textarea id="reviewNote" rows="3" placeholder="填写通过或拒绝的理由…"></textarea></div>
+    <div class="form-group" style="margin-top:14px"><label>审核意见（可选）</label>
+      <textarea id="reviewNote" rows="2" placeholder="填写通过或拒绝的理由…"></textarea>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" id="reviewCancel">取消</button>
       <button class="btn btn-danger"    id="reviewReject">拒绝</button>
-      <button class="btn btn-primary"   id="reviewApprove">通过</button>
+      <button class="btn btn-primary"   id="reviewApprove" disabled>通过</button>
     </div>
   </div>
 </div>
@@ -146,19 +204,15 @@ initSidebar();
 
 const user = await refreshUser();
 const isAdmin = user.role === 'admin';
-const ADMIN_HEADERS = { 'Content-Type': 'application/json', 'X-Admin-Password': 'admin123' };
 
-document.getElementById('userBar').innerHTML = `
-  <span class="username">${user.username}${isAdmin ? '（管理员）' : ''}</span>
-  <button class="logout" id="logoutBtn">退出</button>`;
-document.getElementById('logoutBtn').addEventListener('click', () => logout());
-if (isAdmin) { const l = document.getElementById('usersLink'); if (l) l.style.display = 'block'; const k = document.getElementById('keysLink'); if (k) k.style.display = 'block'; }
+// 审核 tab 所有登录用户可见，由后端按 reviewer_id=self 过滤；
+// 密钥管理 tab 同样人人可见，内部权限由 keys.html 自身控制。
 
-// 管理员额外插入「审核管理」tab
-if (isAdmin) {
-  const tab = document.createElement('button');
-  tab.className = 'tab'; tab.dataset.tab = 'review'; tab.textContent = '审核管理';
-  document.getElementById('tabBar').appendChild(tab);
+// budget 渲染：原值已带"元"则直接用，否则补"元"
+function fmtBudget(b) {
+  const s = String(b || '').trim();
+  if (!s) return '—';
+  return /元|¥|\$|万/.test(s) ? s : (s + ' 元');
 }
 
 // Tab 切换
@@ -169,84 +223,219 @@ document.querySelectorAll('.tab').forEach(t => {
     t.classList.add('active');
     document.getElementById('tab-' + t.dataset.tab).classList.add('active');
     if (t.dataset.tab === 'review') loadReview();
+    if (t.dataset.tab === 'keys') {
+      const fr = document.getElementById('keysFrame');
+      if (!fr.getAttribute('src')) fr.src = 'keys.html?embed=1';
+    }
   });
 });
+
+// 默认 tab 由 ?tab= 决定
+const initTab = new URLSearchParams(location.search).get('tab');
+if (initTab) {
+  const btn = document.querySelector(`.tab[data-tab="${initTab}"]`);
+  if (btn) btn.click();
+}
 
 // ── 我的申请 ──────────────────────────────────────────────
 const STATUS = { pending:['审核中','badge-yellow'], approved:['已通过','badge-green'], rejected:['已拒绝','badge-red'] };
 
+// 缓存 + 过滤状态(供 renderMy/renderReview 使用)
+let _myList = [], _reviewList = [];
+const _myFilters = {}, _reviewFilters = {};
+const SELECT_COLS = new Set(['provider','manager','status','username']);
+
+function _normVal(r, col) {
+  if (col === 'api_key_name') return r.status === 'approved' ? (r.api_key_name || 'NA') : 'NA';
+  if (col === 'status') {
+    const [lbl] = STATUS[r.status] || ['未知'];
+    return lbl;
+  }
+  if (col === 'created_at') return (r.created_at || '').slice(0,10);
+  if (col === 'budget') return fmtBudget(r.budget);
+  return r[col] ?? '';
+}
+function _passFilters(r, filters) {
+  for (const [col, v] of Object.entries(filters)) {
+    if (!v) continue;
+    const val = String(_normVal(r, col) ?? '').toLowerCase();
+    if (!val.includes(String(v).toLowerCase())) return false;
+  }
+  return true;
+}
+
 async function loadMyRequests() {
   const res = await fetch('http://localhost:8000/api-requests/my', { headers: authHeaders() });
-  const list = await res.json().catch(() => []);
+  _myList = await res.json().catch(() => []);
+  renderMy();
+}
+function renderMy() {
   const tbody = document.getElementById('myTbody');
+  const list = _myList.filter(r => _passFilters(r, _myFilters));
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:32px">暂无申请记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:32px">暂无申请记录</td></tr>';
+    refreshFilterIndicators();
     return;
   }
   tbody.innerHTML = list.map(r => {
     const [label,cls] = STATUS[r.status] || ['未知','badge-gray'];
+    const apiName = r.status === 'approved' ? (r.api_key_name || 'NA') : 'NA';
     return `<tr>
-      <td>${r.config_name}</td><td>${r.provider}</td><td>${r.project_name}</td>
+      <td>${r.provider || '—'}</td>
+      <td>${apiName}</td>
       <td>${r.manager || '—'}</td>
-      <td style="color:var(--text-muted)">${r.cc_person || '—'}</td>
+      <td>${r.project_name}</td>
+      <td>${r.lead || '—'}</td>
+      <td>${fmtBudget(r.budget)}</td>
       <td><span class="badge ${cls}">${label}</span></td>
       <td>${r.created_at.slice(0,10)}</td>
       <td style="color:var(--text-muted)">${r.review_note || '—'}</td>
     </tr>`;
   }).join('');
+  refreshFilterIndicators();
 }
 
-// ── 审核管理（管理员） ────────────────────────────────────
+// ── 审核管理 ──────────────────────────────────────────────
 let reviewingId = null;
 
 async function loadReview() {
-  const res = await fetch('http://localhost:8000/admin/api-requests', { headers: ADMIN_HEADERS });
-  const list = await res.json().catch(() => []);
+  const res = await fetch('http://localhost:8000/admin/api-requests', { headers: authHeaders() });
+  _reviewList = await res.json().catch(() => []);
+  renderReview();
+}
+function renderReview() {
   const tbody = document.getElementById('reviewTbody');
+  const list = _reviewList.filter(r => _passFilters(r, _reviewFilters));
   if (!list.length) {
     tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:32px">暂无申请</td></tr>';
+    refreshFilterIndicators();
     return;
   }
   tbody.innerHTML = '';
   list.forEach(r => {
     const [label,cls] = STATUS[r.status] || ['未知','badge-gray'];
+    const isReviewer = Number(r.reviewer_id) === Number(user.id);
+    const actionCell = r.status === 'pending'
+      ? (isReviewer
+          ? `<button class="btn btn-primary" style="padding:4px 10px;font-size:.8rem" data-id="${r.id}">审核</button>`
+          : `<button class="btn btn-primary" style="padding:4px 10px;font-size:.8rem;opacity:.4;cursor:not-allowed" disabled title="仅指定审批人可操作">审核</button>`)
+      : `<span style="color:var(--text-muted);font-size:.82rem">${r.review_note || '—'}</span>`;
+    const apiName = r.status === 'approved' ? (r.api_key_name || 'NA') : 'NA';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${r.username}</td>
-      <td>${r.config_name}<br><small style="color:var(--text-muted)">${r.provider}</small></td>
-      <td>${r.project_name}</td>
-      <td style="max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r.purpose}">${r.purpose}</td>
-      <td>${r.lead}</td><td>${r.budget}</td>
+      <td>${r.provider || '—'}</td>
+      <td>${apiName}</td>
       <td>${r.manager || '—'}</td>
+      <td>${r.project_name}</td>
+      <td>${r.lead || '—'}</td>
+      <td>${fmtBudget(r.budget)}</td>
       <td><span class="badge ${cls}">${label}</span></td>
       <td>${r.created_at.slice(0,10)}</td>
-      <td>${r.status === 'pending'
-        ? `<button class="btn btn-primary" style="padding:4px 10px;font-size:.8rem" data-id="${r.id}" data-config-id="${r.config_id}">审核</button>`
-        : `<span style="color:var(--text-muted);font-size:.82rem">${r.review_note || '—'}</span>`
-      }</td>`;
+      <td>${actionCell}</td>`;
     tbody.appendChild(tr);
   });
-  tbody.querySelectorAll('[data-id]').forEach(b =>
-    b.addEventListener('click', async () => {
-      reviewingId = b.dataset.id;
-      reviewingConfigId = b.dataset.configId;
-      document.getElementById('reviewNote').value = '';
-      document.getElementById('reviewSubAccount').innerHTML = '<option value="">— 不分配子账号 —</option>';
-      // 加载该配置的子账号列表
-      if (reviewingConfigId) {
-        const res = await fetch(`http://localhost:8000/admin/configs/${reviewingConfigId}/sub-accounts`, { headers: ADMIN_HEADERS });
-        const subs = await res.json().catch(() => []);
-        subs.filter(s => s.is_active).forEach(s => {
-          const opt = document.createElement('option');
-          opt.value = s.id; opt.textContent = `${s.name}（${s.quota_type==='unlimited'?'无限额度':`¥${s.quota_amount}`}）`;
-          document.getElementById('reviewSubAccount').appendChild(opt);
-        });
-      }
-      document.getElementById('reviewBg').classList.add('open');
-    }));
+  tbody.querySelectorAll('[data-id]:not([disabled])').forEach(b =>
+    b.addEventListener('click', () => openReviewModal(parseInt(b.dataset.id))));
+  refreshFilterIndicators();
 }
 
-let reviewingConfigId = null;
+// ── 表头筛选浮层 ─────────────────────────────────────────
+let _openFilterPop = null;
+function closeFilterPop() {
+  if (_openFilterPop) { _openFilterPop.remove(); _openFilterPop = null; }
+}
+function refreshFilterIndicators() {
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    const filters = btn.dataset.tbl === 'my' ? _myFilters : _reviewFilters;
+    btn.classList.toggle('active', !!filters[btn.dataset.fcol]);
+  });
+}
+function _escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.filter-pop') && !e.target.closest('.filter-btn')) closeFilterPop();
+});
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.filter-btn');
+  if (!btn) return;
+  e.stopPropagation();
+  const tbl = btn.dataset.tbl;
+  const col = btn.dataset.fcol;
+  if (_openFilterPop && _openFilterPop.dataset.tbl === tbl && _openFilterPop.dataset.fcol === col) {
+    closeFilterPop(); return;
+  }
+  closeFilterPop();
+
+  const filters = tbl === 'my' ? _myFilters : _reviewFilters;
+  const list    = tbl === 'my' ? _myList    : _reviewList;
+  const rerender = tbl === 'my' ? renderMy : renderReview;
+
+  const pop = document.createElement('div');
+  pop.className = 'filter-pop';
+  pop.dataset.tbl = tbl;
+  pop.dataset.fcol = col;
+  if (SELECT_COLS.has(col)) {
+    const opts = [...new Set(list.map(r => _normVal(r, col)).filter(v => v !== '' && v != null))]
+      .map(v => String(v)).sort();
+    pop.innerHTML = `<select><option value="">全部</option>${
+      opts.map(o => `<option value="${_escHtml(o)}"${filters[col]===o?' selected':''}>${_escHtml(o)}</option>`).join('')
+    }</select>`;
+    pop.querySelector('select').addEventListener('change', e2 => {
+      filters[col] = e2.target.value;
+      rerender();
+    });
+  } else {
+    pop.innerHTML = `<input placeholder="模糊筛选…" value="${_escHtml(filters[col] || '')}">`;
+    const inp = pop.querySelector('input');
+    inp.addEventListener('input', () => {
+      filters[col] = inp.value;
+      rerender();
+    });
+    setTimeout(() => inp.focus(), 0);
+  }
+  btn.parentElement.appendChild(pop);
+  _openFilterPop = pop;
+});
+
+async function openReviewModal(reqId) {
+  reviewingId = reqId;
+  document.getElementById('reviewNote').value = '';
+  document.getElementById('reviewApprove').disabled = true;
+  const tbody = document.getElementById('candidateTbody');
+  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px">加载中…</td></tr>';
+  document.getElementById('reviewBg').classList.add('open');
+
+  try {
+    const res = await fetch(`http://localhost:8000/admin/api-requests/${reqId}/candidate-keys`,
+      { headers: authHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      tbody.innerHTML = `<tr><td colspan="5" style="color:#dc2626;padding:16px">加载失败：${err.detail || res.status}</td></tr>`;
+      return;
+    }
+    const keys = await res.json().catch(() => []);
+    if (!keys.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px">该帐号下暂无可用 key，请先在密钥管理中为该供应商帐号添加 API key</td></tr>';
+      return;
+    }
+    tbody.innerHTML = keys.map(k => `
+      <tr>
+        <td><input type="radio" name="candidateKey" value="${k.api_key_id}"></td>
+        <td>${k.sub_account_name}</td>
+        <td>${k.api_key_name}</td>
+        <td>${k.last_total != null ? k.last_total : '--'}</td>
+        <td>${k.last_balance != null ? k.last_balance : '--'}</td>
+      </tr>`).join('');
+    tbody.querySelectorAll('input[type=radio]').forEach(r =>
+      r.addEventListener('change', () => {
+        document.getElementById('reviewApprove').disabled = false;
+      }));
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="5" style="color:#dc2626;padding:16px">加载失败：${e.message}</td></tr>`;
+  }
+}
 
 document.getElementById('reviewCancel').addEventListener('click',  () => document.getElementById('reviewBg').classList.remove('open'));
 document.getElementById('reviewApprove').addEventListener('click', () => doReview('approved'));
@@ -254,44 +443,89 @@ document.getElementById('reviewReject').addEventListener('click',  () => doRevie
 
 async function doReview(status) {
   const note = document.getElementById('reviewNote').value.trim();
-  const subAccountId = document.getElementById('reviewSubAccount').value;
-  const url = subAccountId
-    ? `http://localhost:8000/admin/api-requests/${reviewingId}?sub_account_id=${subAccountId}`
-    : `http://localhost:8000/admin/api-requests/${reviewingId}`;
-  await fetch(url, {
-    method: 'PUT', headers: ADMIN_HEADERS,
-    body: JSON.stringify({ status, review_note: note }),
+  const selected = document.querySelector('input[name="candidateKey"]:checked');
+  const api_key_id = selected ? parseInt(selected.value) : null;
+  if (status === 'approved' && !api_key_id) {
+    alert('通过时必须选择一个 API key'); return;
+  }
+  const body = { status, review_note: note };
+  if (api_key_id) body.api_key_id = api_key_id;
+  const res = await fetch(`http://localhost:8000/admin/api-requests/${reviewingId}`, {
+    method: 'PUT', headers: authHeaders(),
+    body: JSON.stringify(body),
   });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    alert('操作失败：' + (d.detail || res.status));
+    return;
+  }
   document.getElementById('reviewBg').classList.remove('open');
   loadReview();
 }
 
-// ── 新增申请弹窗 ──────────────────────────────────────────
-let _configList = [];
+// ── 新增申请弹窗（5 字段级联） ────────────────────────────
+let _cascadeOptions = [];   // [{id, provider, manager_username, manager_user_id, team}]
+let _allUsers = [];         // [{id, username}]
+let _selectedAccountId = null;
+let _selectedReviewerId = null;
 
 document.getElementById('applyBtn').addEventListener('click', async () => {
-  const res = await fetch('http://localhost:8000/active-configs');
-  _configList = await res.json().catch(() => []);
-  const sel = document.getElementById('fConfig');
-  sel.innerHTML =
-    '<option value="">— 请选择 API —</option>' +
-    _configList.map(c => `<option value="${c.id}">${c.name}（${c.provider}）</option>`).join('');
-  ['fProject','fPurpose','fLead','fBudget','fCc','fSub'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('fManagerGroup').style.display = 'none';
-  document.getElementById('fManagerDisplay').value = '';
   document.getElementById('modalErr').textContent = '';
+  ['fBudget','fProject','fLead','fCc','fPurpose'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('fAccountPreview').textContent = '';
+  _selectedAccountId = null;
+  _selectedReviewerId = null;
+  document.getElementById('fProvider').disabled = true;
+  document.getElementById('fProvider').innerHTML = '<option value="">— 请先选择审批人 —</option>';
+  document.getElementById('fManager').innerHTML = '<option value="">— 请选择审批人 —</option>';
+
+  try {
+    const [cascRes, usersRes] = await Promise.all([
+      fetch('http://localhost:8000/api-requests/cascade-options'),
+      fetch('http://localhost:8000/admin/users', { headers: authHeaders() }),
+    ]);
+    _cascadeOptions = await cascRes.json().catch(() => []);
+    _allUsers = await usersRes.json().catch(() => []);
+  } catch {}
+
+  const mgrSel = document.getElementById('fManager');
+  mgrSel.innerHTML = '<option value="">— 请选择审批人 —</option>' +
+    _allUsers.map(u => `<option value="${u.id}">${u.username}</option>`).join('');
   document.getElementById('modalBg').classList.add('open');
 });
 
-document.getElementById('fConfig').addEventListener('change', () => {
-  const id = document.getElementById('fConfig').value;
-  const cfg = _configList.find(c => String(c.id) === id);
-  const group = document.getElementById('fManagerGroup');
-  if (id) {
-    document.getElementById('fManagerDisplay').value = cfg?.manager || '未设置';
-    group.style.display = 'block';
+document.getElementById('fManager').addEventListener('change', () => {
+  const reviewerId = parseInt(document.getElementById('fManager').value);
+  _selectedReviewerId = reviewerId || null;
+  _selectedAccountId = null;
+  document.getElementById('fAccountPreview').textContent = '';
+  const provSel = document.getElementById('fProvider');
+  if (!reviewerId) {
+    provSel.disabled = true;
+    provSel.innerHTML = '<option value="">— 请先选择审批人 —</option>';
+    return;
+  }
+  const options = _cascadeOptions.filter(o => o.manager_user_id === reviewerId);
+  if (!options.length) {
+    provSel.disabled = true;
+    provSel.innerHTML = '<option value="">— 该成员名下没有 API —</option>';
+    alert('该成员名下没有 API');
+    return;
+  }
+  provSel.disabled = false;
+  provSel.innerHTML = '<option value="">— 请选择供应商 —</option>' +
+    options.map(o => `<option value="${o.id}">${o.provider}</option>`).join('');
+});
+
+document.getElementById('fProvider').addEventListener('change', () => {
+  const accountId = parseInt(document.getElementById('fProvider').value);
+  _selectedAccountId = accountId || null;
+  const opt = _cascadeOptions.find(o => o.id === accountId);
+  const preview = document.getElementById('fAccountPreview');
+  if (opt) {
+    preview.textContent = `将申请：供应商 ${opt.provider}，管理员 ${opt.manager_username || '—'}`;
   } else {
-    group.style.display = 'none';
+    preview.textContent = '';
   }
 });
 
@@ -303,22 +537,23 @@ document.getElementById('modalBg').addEventListener('click', e => {
 document.getElementById('submitBtn').addEventListener('click', async () => {
   const err = document.getElementById('modalErr');
   err.textContent = '';
-  const config_id    = parseInt(document.getElementById('fConfig').value);
+  const account_id   = _selectedAccountId;
+  const reviewer_id  = _selectedReviewerId;
   const project_name = document.getElementById('fProject').value.trim();
   const purpose      = document.getElementById('fPurpose').value.trim();
   const lead         = document.getElementById('fLead').value.trim();
   const budget       = document.getElementById('fBudget').value.trim();
   const cc_person    = document.getElementById('fCc').value.trim();
-  const sub_accounts = document.getElementById('fSub').value.trim();
-  if (!config_id)    { err.textContent = '请选择 API'; return; }
+  if (!reviewer_id)  { err.textContent = '请选择审批人'; return; }
+  if (!account_id)   { err.textContent = '请选择供应商'; return; }
   if (!project_name) { err.textContent = '请输入需求项目'; return; }
-  if (!purpose)      { err.textContent = '请输入需求目的'; return; }
+  if (!purpose)      { err.textContent = '请输入需求详情'; return; }
   if (!lead)         { err.textContent = '请输入项目负责人'; return; }
   if (!budget)       { err.textContent = '请输入需求预算'; return; }
   try {
     const res = await fetch('http://localhost:8000/api-requests', {
       method: 'POST', headers: authHeaders(),
-      body: JSON.stringify({ config_id, project_name, purpose, lead, budget, cc_person, sub_accounts }),
+      body: JSON.stringify({ account_id, reviewer_id, project_name, purpose, lead, budget, cc_person }),
     });
     if (!res.ok) { const d = await res.json(); throw new Error(d.detail); }
     document.getElementById('modalBg').classList.remove('open');

@@ -5,3 +5,23 @@ admin.db.pre-v1-*.db
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# 数据库(含真实数据,不入库)
+admin.db
+
+# 包含真实密钥/Token
+config/密钥
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# Claude 工作区 / 编辑器临时
+.claude/
+*.swp
+*.swo
+
+# 临时测试数据
+批处理.xlsx
+docs/superpowers/specs/setting.json

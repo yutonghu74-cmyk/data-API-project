@@ -191,6 +191,17 @@
     <div class="form-group"><label>提供商</label><input id="fProvider" placeholder="如 anthropic"></div>
     <div class="form-group"><label>Base URL</label><input id="fBaseUrl" placeholder="https://api.anthropic.com/v1"></div>
     <div class="form-group"><label>API Key</label><input id="fApiKey" type="password" placeholder="sk-ant-..."></div>
+    <div class="form-group">
+      <label style="display:flex;align-items:center;gap:8px;justify-content:space-between">
+        <span>可用模型(逗号分隔)</span>
+        <button type="button" id="fetchModelsBtn" class="btn-icon"
+                style="font-size:.78rem;padding:3px 10px"
+                title="保存后可从供应商 /v1/models 自动拉取">从供应商拉取</button>
+      </label>
+      <textarea id="fModels" rows="3" placeholder="如 gpt-4o,gpt-4o-mini"
+                style="width:100%;font-family:inherit;font-size:.85rem;resize:vertical"></textarea>
+      <p id="fetchModelsHint" style="color:var(--text-muted);font-size:.75rem;margin-top:4px;min-height:14px"></p>
+    </div>
     <p style="color:var(--error);font-size:.83rem;min-height:18px" id="modalError"></p>
     <div class="modal-actions">
       <button class="btn-secondary" id="cancelBtn">取消</button>
@@ -200,7 +211,7 @@
 </div>
 
 <script type="module">
-import { login, getConfigs, createConfig, updateConfig, deleteConfig, getStats, getDailyStats } from '../assets/js/admin.js';
+import { login, getConfigs, createConfig, updateConfig, deleteConfig, getStats, getDailyStats, fetchProviderModels } from '../assets/js/admin.js';
 
 // ── 登录 ──────────────────────────────────────────────────
 const loginWrap  = document.getElementById('loginWrap');
@@ -278,12 +289,26 @@ const fName      = document.getElementById('fName');
 const fProvider  = document.getElementById('fProvider');
 const fBaseUrl   = document.getElementById('fBaseUrl');
 const fApiKey    = document.getElementById('fApiKey');
+const fModels    = document.getElementById('fModels');
+const fetchModelsBtn  = document.getElementById('fetchModelsBtn');
+const fetchModelsHint = document.getElementById('fetchModelsHint');
+
+function refreshFetchBtn() {
+  if (editingId) {
+    fetchModelsBtn.disabled = false;
+    fetchModelsHint.textContent = '';
+  } else {
+    fetchModelsBtn.disabled = true;
+    fetchModelsHint.textContent = '请先保存配置后再拉取';
+  }
+}
 
 document.getElementById('addConfigBtn').addEventListener('click', () => {
   editingId = null;
   modalTitle.textContent = '新增配置';
-  fName.value = fProvider.value = fBaseUrl.value = fApiKey.value = '';
+  fName.value = fProvider.value = fBaseUrl.value = fApiKey.value = fModels.value = '';
   modalError.textContent = '';
+  refreshFetchBtn();
   modalBg.classList.add('open');
 });
 
@@ -295,9 +320,34 @@ function openEdit(c) {
   modalTitle.textContent = '编辑配置';
   fName.value = c.name; fProvider.value = c.provider;
   fBaseUrl.value = c.base_url; fApiKey.value = '';
+  fModels.value = c.models || '';
   modalError.textContent = '';
+  refreshFetchBtn();
   modalBg.classList.add('open');
 }
+
+fetchModelsBtn.addEventListener('click', async () => {
+  if (!editingId) return;
+  const original = fetchModelsBtn.textContent;
+  fetchModelsBtn.disabled = true;
+  fetchModelsBtn.textContent = '拉取中…';
+  fetchModelsHint.textContent = '';
+  try {
+    const data = await fetchProviderModels(editingId);
+    const list = data.models || [];
+    if (!list.length) {
+      fetchModelsHint.textContent = '供应商返回 0 个模型';
+    } else {
+      fModels.value = list.join(',');
+      fetchModelsHint.textContent = `已拉取 ${list.length} 个模型,记得点保存`;
+    }
+  } catch (e) {
+    fetchModelsHint.textContent = '拉取失败:' + (e.message || e);
+  } finally {
+    fetchModelsBtn.disabled = false;
+    fetchModelsBtn.textContent = original;
+  }
+});
 
 document.getElementById('saveBtn').addEventListener('click', async () => {
   modalError.textContent = '';
@@ -310,6 +360,7 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
   const body = {
     name: fName.value.trim(), provider: fProvider.value.trim(),
     base_url: fBaseUrl.value.trim(), api_key: fApiKey.value.trim() || '(unchanged)',
+    models: fModels.value.split(',').map(s => s.trim()).filter(Boolean).join(','),
     is_active: 1,
   };
   try {

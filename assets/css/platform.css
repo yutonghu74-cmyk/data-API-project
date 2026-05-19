@@ -80,8 +80,8 @@ body {
 .breadcrumb-right .logout:hover { color: var(--green-hover); text-decoration: underline; }
 
 /* ── 管理员专属侧边栏链接 ─────────────────────── */
-.sidebar-admin { display: none; }
-body.is-admin  .sidebar-admin { display: block; }
+/* 非管理员一律隐藏带 .sidebar-admin 的元素;管理员则恢复元素自身默认 display */
+body:not(.is-admin) .sidebar-admin { display: none !important; }
 
 /* ── 布局 ────────────────────────────────────── */
 .layout {

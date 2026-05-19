@@ -136,6 +136,7 @@ for col, defn in [
     ("quota_total_json_path", "TEXT DEFAULT ''"),
     ("balance_json_path",     "TEXT DEFAULT ''"),
     ("cost_json_path",        "TEXT DEFAULT ''"),
+    
 ]:
     try:
         conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} {defn}")

@@ -9,6 +9,7 @@ export function initSidebar() {
   try {
     const cached = JSON.parse(localStorage.getItem('platform_user') || 'null');
     if (cached?.role === 'admin') document.body.classList.add('is-admin');
+    else document.body.classList.remove('is-admin');
   } catch (_) {}
 
   // embed 模式（作为 iframe 嵌入时）跳过顶栏和面包屑注入
@@ -16,24 +17,27 @@ export function initSidebar() {
     || new URLSearchParams(location.search).get('embed') === '1';
 
   if (!isEmbed) {
-    const topBar = document.createElement('div');
-    topBar.className = 'top-bar';
+    const existingTopBar = document.querySelector('.top-bar');
+    if (!existingTopBar) {
+      const topBar = document.createElement('div');
+      topBar.className = 'top-bar';
 
-    if (toggle) topBar.appendChild(toggle);
+      if (toggle) topBar.appendChild(toggle);
 
-    const brandEl = breadcrumb?.querySelector('.brand');
-    if (brandEl) topBar.appendChild(brandEl);
+      const brandEl = breadcrumb?.querySelector('.brand');
+      if (brandEl) topBar.appendChild(brandEl);
 
-    const spacer = document.createElement('div');
-    spacer.style.flex = '1';
-    topBar.appendChild(spacer);
+      const spacer = document.createElement('div');
+      spacer.style.flex = '1';
+      topBar.appendChild(spacer);
 
-    const userBar = document.getElementById('userBar');
-    if (userBar) topBar.appendChild(userBar);
+      const userBar = document.getElementById('userBar');
+      if (userBar) topBar.appendChild(userBar);
 
-    document.body.insertBefore(topBar, document.body.firstChild);
+      document.body.insertBefore(topBar, document.body.firstChild);
 
-    breadcrumb?.querySelector('.sep')?.remove();
+      breadcrumb?.querySelector('.sep')?.remove();
+    }
   }
 
   // 创建遮罩
