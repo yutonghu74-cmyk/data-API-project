@@ -19,9 +19,6 @@
 import os
 import sys
 import anthropic
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
 def stream_chat(messages: list[dict], model: str, system: str = "", base_url: str = "") -> tuple[str, int, int]:

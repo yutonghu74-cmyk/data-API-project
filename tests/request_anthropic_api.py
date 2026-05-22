@@ -13,7 +13,7 @@
     ANTHROPIC_MODEL          默认 claude-sonnet-4-6
     ANTHROPIC_VERSION        默认 2023-06-01
     ANTHROPIC_SYSTEM         可选 system prompt
-    ANTHROPIC_INSECURE       =1 时不校验 SSL（自签证书代理）
+    ANTHROPIC_INSECURE       默认 =1（不校验 SSL，适配自签证书代理）；设 =0 启用校验
     HTTPS_PROXY / HTTP_PROXY requests 默认会读
 """
 import json
@@ -120,7 +120,8 @@ def main():
     model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     api_version = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
     system = os.getenv("ANTHROPIC_SYSTEM", "")
-    verify_ssl = os.getenv("ANTHROPIC_INSECURE", "").lower() not in ("1", "true", "yes")
+    # 默认忽略 SSL 校验，便于通过自签证书代理；设 ANTHROPIC_INSECURE=0 重新开启
+    verify_ssl = os.getenv("ANTHROPIC_INSECURE", "1").lower() in ("0", "false", "no")
 
     if not verify_ssl:
         # 关 SSL 校验时同步压掉 InsecureRequestWarning
