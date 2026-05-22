@@ -7,19 +7,25 @@
 
 用法:
     python request_openai_api.py "你好"
-    python request_openai_api.py            # 交互模式
+    python request_openai_api.py "描述这张图" --image ./photo.jpg
+    python request_openai_api.py "对比这两张" -i a.png -i https://x.com/b.jpg
+    python request_openai_api.py             # 交互模式 (可用 `/img <路径或URL> <文字>` 带图)
 
 环境变量:
     OPENAI_API_KEY        必填
     OPENAI_BASE_URL       默认走 SDK 默认 (https://api.openai.com/v1)
-    OPENAI_MODEL          默认 gpt-4o-mini
+    OPENAI_MODEL          默认 gpt-4o-mini（须支持 vision 才能看图）
     OPENAI_SYSTEM         可选 system prompt
     OPENAI_INSECURE       =1 时不校验 SSL（自签证书代理场景）
     OPENAI_HTTP_PROXY     可选；优先于 HTTPS_PROXY/HTTP_PROXY
     HTTPS_PROXY / HTTP_PROXY  httpx 默认会读
 """
+import argparse
+import base64
+import mimetypes
 import os
 import sys
+from pathlib import Path
 import httpx
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -32,6 +38,31 @@ except (AttributeError, Exception):
     pass
 
 load_dotenv()
+
+
+def _build_image_block(src: str) -> dict:
+    """src 可以是本地文件路径，或 http(s)/data: URL。返回 OpenAI vision 格式的 image_url 块。"""
+    if src.startswith(("http://", "https://", "data:")):
+        return {"type": "image_url", "image_url": {"url": src}}
+    path = Path(src).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"图片不存在: {src}")
+    mime, _ = mimetypes.guess_type(path.name)
+    mime = mime or "image/jpeg"
+    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+
+
+def _build_user_message(text: str, image_sources: list[str]) -> dict:
+    """根据是否带图，组装单条 user message。无图时退化为纯字符串 content。"""
+    if not image_sources:
+        return {"role": "user", "content": text}
+    content = []
+    if text:
+        content.append({"type": "text", "text": text})
+    for src in image_sources:
+        content.append(_build_image_block(src))
+    return {"role": "user", "content": content}
 
 
 def _fix_mojibake(s: str) -> str:
@@ -107,6 +138,12 @@ def stream_chat(
 
 
 def main():
+    parser = argparse.ArgumentParser(description="OpenAI Chat 测试脚本（支持文本 + 图片）")
+    parser.add_argument("prompt", nargs="*", help="用户文本消息")
+    parser.add_argument("--image", "-i", action="append", default=[],
+                        help="图片路径或 URL，可重复使用以传多张")
+    args = parser.parse_args()
+
     api_key = os.getenv("OPENAI_API_KEY", "")
     base_url = os.getenv("OPENAI_BASE_URL", "")
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -121,15 +158,16 @@ def main():
     client = _build_client(api_key=api_key, base_url=base_url,
                            verify_ssl=verify_ssl, proxy=proxy)
 
-    if len(sys.argv) > 1:
-        user_text = " ".join(sys.argv[1:])
-        _, pt, ct = stream_chat(client, [{"role": "user", "content": user_text}],
-                                model=model, system=system)
+    if args.prompt or args.image:
+        user_text = " ".join(args.prompt)
+        user_msg = _build_user_message(user_text, args.image)
+        _, pt, ct = stream_chat(client, [user_msg], model=model, system=system)
         print(f"\n[usage] prompt={pt} completion={ct}")
         return
 
     history: list[dict] = []
     print(f"[model] {model}  base_url={base_url or 'default'}  (Ctrl-C 退出)")
+    print("提示：交互模式可用 `/img <路径或URL> <文字>` 带图，例如 `/img ./a.png 描述这张图`")
     while True:
         try:
             user_text = input("\n> ").strip()
@@ -138,7 +176,22 @@ def main():
             break
         if not user_text:
             continue
-        history.append({"role": "user", "content": user_text})
+
+        # 解析 /img 命令：/img <src> [text...]
+        img_sources: list[str] = []
+        if user_text.startswith("/img "):
+            parts = user_text[5:].split(maxsplit=1)
+            if parts:
+                img_sources.append(parts[0])
+                user_text = parts[1] if len(parts) > 1 else ""
+
+        try:
+            user_msg = _build_user_message(user_text, img_sources)
+        except FileNotFoundError as e:
+            print(f"[error] {e}")
+            continue
+
+        history.append(user_msg)
         try:
             reply, pt, ct = stream_chat(client, history, model=model, system=system)
         except Exception as e:
@@ -151,4 +204,7 @@ def main():
 
 if __name__ == "__main__":
     # 本地调试用，注意不要提交到 git
+    # os.environ["OPENAI_API_KEY"] = "sk-..."
+    # os.environ["OPENAI_BASE_URL"] = "https://api.openai.com"
+    os.environ["OPENAI_INSECURE"] = "1"  # 跳过 SSL 校验（自签证书代理）
     main()
